@@ -1,0 +1,33 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Connect to Simson Addon",
+        "description": "Enter the URL of the Simson addon's local API. If the addon is running on this HA instance, the default should work.",
+        "data": {
+          "addon_url": "Addon API URL"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Cannot connect to the Simson addon. Make sure it is running."
+    },
+    "abort": {
+      "already_configured": "This Simson node is already configured.",
+      "addon_not_ready": "The Simson addon is not ready yet. Please start it first."
+    }
+  },
+  "entity": {
+    "sensor": {
+      "connection": {
+        "name": "Connection"
+      },
+      "call_state": {
+        "name": "Call State"
+      },
+      "calls_count": {
+        "name": "Calls Count"
+      }
+    }
+  }
+}

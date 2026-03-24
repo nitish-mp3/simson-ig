@@ -1,0 +1,11 @@
+{
+  "domain": "simson",
+  "name": "Simson Call Relay",
+  "codeowners": ["@wirsy"],
+  "config_flow": true,
+  "documentation": "https://github.com/wirsy/simson",
+  "iot_class": "local_polling",
+  "version": "1.0.0",
+  "requirements": [],
+  "dependencies": []
+}
