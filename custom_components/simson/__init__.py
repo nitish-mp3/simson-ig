@@ -13,7 +13,6 @@ from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
-from homeassistant.components.frontend import async_register_extra_module_url
 
 from .api import SimsonApiClient
 from .const import (
@@ -29,7 +28,7 @@ from .const import (
 logger = logging.getLogger(__name__)
 
 SCAN_INTERVAL = timedelta(seconds=5)
-_CARD_URL = f"/custom_components/simson/www/simson-card.js"
+_CARD_URL = "/simson/www/simson-card.js"
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -43,13 +42,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         await client.close()
         raise ConfigEntryNotReady(f"Cannot connect to Simson addon: {err}") from err
 
-    # Register the Lovelace card JS (idempotent — HA deduplicates).
+    # Serve the Lovelace card JS as a static resource.
+    # The path /simson/www/simson-card.js is stable and predictable.
+    # Users must add it once in HA: Settings → Dashboards → ⋮ → Resources
+    #   URL: /simson/www/simson-card.js   Type: JavaScript module
     hass.http.register_static_path(
-        "/custom_components/simson/www",
+        "/simson/www",
         str(Path(__file__).parent / "www"),
         cache_headers=False,
     )
-    async_register_extra_module_url(hass, _CARD_URL)
 
     coordinator = SimsonCoordinator(hass, client)
     await coordinator.async_config_entry_first_refresh()
