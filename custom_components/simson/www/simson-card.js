@@ -8,7 +8,7 @@
  *   title: Simson                 # card title (optional)
  */
 
-const VERSION = "1.0.0";
+const VERSION = "1.0.1";
 
 // ── Styles ────────────────────────────────────────────────────────────────────
 const STYLES = `
@@ -295,18 +295,29 @@ class SimsonCard extends HTMLElement {
         </div>
       </div>`;
 
-    this._root().innerHTML = html;
+    // Save focus state before wiping DOM so typing isn't interrupted.
+    const root = this._root();
+    const wasInputFocused = root.activeElement?.id === "target-input";
+    const selStart = wasInputFocused ? root.querySelector("#target-input")?.selectionStart : null;
+    const selEnd   = wasInputFocused ? root.querySelector("#target-input")?.selectionEnd   : null;
+
+    root.innerHTML = html;
 
     // Attach event listeners.
-    this._root().querySelector("#btn-call")?.addEventListener("click", () => this._dial());
-    this._root().querySelector("#btn-answer")?.addEventListener("click", () => this._answer());
-    this._root().querySelector("#btn-reject")?.addEventListener("click", () => this._reject());
-    this._root().querySelector("#btn-hangup")?.addEventListener("click", () => this._hangup());
+    root.querySelector("#btn-call")?.addEventListener("click", () => this._dial());
+    root.querySelector("#btn-answer")?.addEventListener("click", () => this._answer());
+    root.querySelector("#btn-reject")?.addEventListener("click", () => this._reject());
+    root.querySelector("#btn-hangup")?.addEventListener("click", () => this._hangup());
 
-    const inputEl = this._root().querySelector("#target-input");
+    const inputEl = root.querySelector("#target-input");
     if (inputEl) {
       inputEl.addEventListener("input", e => { this._targetInput = e.target.value; });
       inputEl.addEventListener("keydown", e => { if (e.key === "Enter") this._dial(); });
+      // Restore focus and cursor position if the input was active during re-render.
+      if (wasInputFocused) {
+        inputEl.focus();
+        inputEl.setSelectionRange(selStart, selEnd);
+      }
     }
 
     // Prime timer if call is active.
