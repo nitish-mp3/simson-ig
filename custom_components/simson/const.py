@@ -6,7 +6,7 @@ DOMAIN = "simson"
 CONF_ADDON_URL = "addon_url"
 
 # Default addon ingress URL
-DEFAULT_ADDON_URL = "http://localhost:8099"
+DEFAULT_ADDON_URL = "http://localhost:8799"
 
 # Platforms
 PLATFORMS = ["sensor"]
