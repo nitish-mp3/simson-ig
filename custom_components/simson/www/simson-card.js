@@ -1,5 +1,5 @@
 /**
- * Simson Call Relay — Lovelace Card v2.1.0
+ * Simson Call Relay — Lovelace Card v2.2.0
  *
  * Full WebRTC voice calling between HA instances.
  * WebRTC signals travel through HA WebSocket (avoids HTTPS→HTTP mixed content).
@@ -11,7 +11,7 @@
  *   title: Simson                 # optional
  */
 
-const VERSION = "2.1.0";
+const VERSION = "2.2.0";
 
 // Free STUN servers for NAT traversal.
 const ICE_SERVERS = [
