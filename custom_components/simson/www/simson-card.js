@@ -1,5 +1,5 @@
 /**
- * Simson Call Relay — Lovelace Card v2.2.0
+ * Simson Call Relay — Lovelace Card v2.3.0
  *
  * Full WebRTC voice calling between HA instances.
  * WebRTC signals travel through HA WebSocket (avoids HTTPS→HTTP mixed content).
@@ -11,7 +11,7 @@
  *   title: Simson                 # optional
  */
 
-const VERSION = "2.2.0";
+const VERSION = "2.3.0";
 
 // Free STUN servers for NAT traversal.
 const ICE_SERVERS = [
@@ -109,8 +109,24 @@ const STYLES = `
 
   .mic-denied {
     background: #b71c1c33; border: 1px solid #f4433633; border-radius: 8px;
-    padding: 10px 14px; font-size: 13px; color: #ef9a9a; margin-bottom: 14px;
+    padding: 10px 14px; font-size: 13px; color: #ef9a9a; margin-bottom: 14px; line-height: 1.5;
   }
+  .insecure-warning {
+    background: #e6510033; border: 1px solid #ff980033; border-radius: 8px;
+    padding: 10px 14px; font-size: 13px; color: #ffcc80; margin-bottom: 14px; line-height: 1.5;
+  }
+
+  /* Quick-dial buttons */
+  .quick-dial { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
+  .btn-quick-dial {
+    flex: 1 1 auto; min-width: 100px; background: #1a2940; border: 1px solid #1565c044;
+    color: #90caf9; border-radius: 8px; padding: 10px 14px; font-size: 13px;
+    font-weight: 600; cursor: pointer; transition: background .15s, transform .1s;
+    display: flex; align-items: center; gap: 6px; justify-content: center; white-space: nowrap;
+  }
+  .btn-quick-dial:hover { background: #1e3a5f; }
+  .btn-quick-dial:active { transform: scale(.96); }
+  .btn-quick-dial:disabled { opacity: .4; cursor: not-allowed; transform: none; }
 `;
 
 class SimsonCard extends HTMLElement {
@@ -153,11 +169,24 @@ class SimsonCard extends HTMLElement {
   }
 
   setConfig(config) {
-    if (!config.node_id) throw new Error("simson-card requires node_id");
+    // Backwards compat: old simson-call-card used connection_entity instead of node_id.
+    let nodeId = config.node_id;
+    if (!nodeId && config.connection_entity) {
+      const m = config.connection_entity.match(/^sensor\.simson_(.+)_connection$/);
+      if (m) nodeId = m[1];
+    }
+    if (!nodeId) throw new Error("simson-card requires node_id (or connection_entity)");
+
+    // target_nodes can be strings or {id, label} objects.
+    const targets = (config.target_nodes || []).map(n =>
+      typeof n === "string" ? { id: n, label: n } : { id: n.id, label: n.label || n.id }
+    );
+
     this._config = {
       title: config.title || "Simson",
-      node_id: config.node_id,
+      node_id: nodeId,
       target_node_id: config.target_node_id || "",
+      target_nodes: targets,
     };
     this._targetInput = this._config.target_node_id;
     this._render();
@@ -286,13 +315,29 @@ class SimsonCard extends HTMLElement {
 
   async _startWebRTC() {
     if (this._pc) return;
+    console.info("Simson: starting WebRTC (initiator=%s, callId=%s)", this._isInitiator, this._currentCallId);
+
+    // Check secure context — getUserMedia requires HTTPS (or localhost).
+    if (!window.isSecureContext) {
+      console.error("Simson: not a secure context — getUserMedia requires HTTPS");
+      this._micAllowed = false;
+      this._render();
+      return;
+    }
+    if (!navigator.mediaDevices?.getUserMedia) {
+      console.error("Simson: getUserMedia not available on this browser/context");
+      this._micAllowed = false;
+      this._render();
+      return;
+    }
 
     // Get microphone.
     try {
       this._localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
       this._micAllowed = true;
+      console.info("Simson: microphone access granted");
     } catch (e) {
-      console.error("Microphone access denied:", e);
+      console.error("Simson: microphone access denied:", e);
       this._micAllowed = false;
       this._render();
       return;
@@ -497,6 +542,7 @@ class SimsonCard extends HTMLElement {
     const prev = this._prevCallState;
     if (prev !== callState) {
       this._prevCallState = callState;
+      console.info("Simson: state transition %s → %s (direction=%s, callId=%s)", prev, callState, direction, callId);
 
       if (callState === "incoming" && prev === "idle") {
         // Incoming call — start ringtone.
@@ -545,10 +591,15 @@ class SimsonCard extends HTMLElement {
         <div class="bar ${q < 3 ? (q < 2 ? "weak" : "fair") : ""}" style="height:12px"></div>
       </div>` : "";
 
-    // Mic denied warning.
-    const micWarning = this._micAllowed === false
-      ? `<div class="mic-denied">\u{1F3A4} Microphone access denied. Click the lock icon in your browser\u2019s address bar to allow microphone access, then reload.</div>`
-      : "";
+    // Mic / secure context warnings.
+    let micWarning = "";
+    if (this._micAllowed === false) {
+      if (!window.isSecureContext) {
+        micWarning = `<div class="insecure-warning">\u{1F512} <b>Audio requires HTTPS.</b> You are accessing this page over an insecure connection (HTTP). Microphone access is blocked by your browser.<br><br>\u2192 Use your <b>HTTPS URL</b> (e.g. https://your-ha:8123) or the <b>Home Assistant Companion app</b> to enable voice calls.</div>`;
+      } else {
+        micWarning = `<div class="mic-denied">\u{1F3A4} <b>Microphone access denied.</b> Click the lock/site-settings icon in your browser\u2019s address bar, allow microphone access, then reload the page.</div>`;
+      }
+    }
 
     // Call panel.
     const callPanelHtml = hasCall ? `
@@ -587,6 +638,14 @@ class SimsonCard extends HTMLElement {
         ${isIdle ? `
         <div class="dial-section">
           <div class="dial-label">Dial</div>
+          ${this._config.target_nodes.length ? `
+          <div class="quick-dial">
+            ${this._config.target_nodes.map(n => `
+              <button class="btn-quick-dial" data-target="${this._escapeHtml(n.id)}"
+                ${!connected ? "disabled" : ""}>
+                \u{1F4DE} ${this._escapeHtml(n.label)}
+              </button>`).join("")}
+          </div>` : ""}
           <div class="input-row">
             <input id="target-input" class="node-input" type="text"
               placeholder="node_id (e.g. office)"
@@ -620,6 +679,19 @@ class SimsonCard extends HTMLElement {
     root.querySelector("#btn-hangup")?.addEventListener("click", () => this._hangup());
     root.querySelector("#btn-mute")?.addEventListener("click", () => this._toggleMute());
 
+    // Quick-dial buttons.
+    root.querySelectorAll(".btn-quick-dial").forEach(btn => {
+      btn.addEventListener("click", () => {
+        const target = btn.dataset.target;
+        if (target) {
+          this._isInitiator = true;
+          this._currentRemoteNode = target;
+          this._callStart = null;
+          this._callService("make_call", { target_node_id: target, call_type: "voice" });
+        }
+      });
+    });
+
     const inputEl = root.querySelector("#target-input");
     if (inputEl) {
       inputEl.addEventListener("input", e => { this._targetInput = e.target.value; });
@@ -650,12 +722,18 @@ class SimsonCard extends HTMLElement {
 
   static getConfigElement() { return document.createElement("div"); }
   static getStubConfig() {
-    return { node_id: "living_room", target_node_id: "", title: "Simson" };
+    return { node_id: "living_room", target_node_id: "", title: "Simson", target_nodes: [] };
   }
   getCardSize() { return 3; }
 }
 
 customElements.define("simson-card", SimsonCard);
+
+// Backwards compat: also register as simson-call-card so existing dashboards
+// using the old card name get the WebRTC-capable card automatically.
+try {
+  customElements.define("simson-call-card", class extends SimsonCard {});
+} catch (e) { /* already defined, no problem */ }
 
 window.customCards = window.customCards || [];
 window.customCards.push({
@@ -664,6 +742,12 @@ window.customCards.push({
   description: "Voice calling between Home Assistant instances with WebRTC audio",
   preview: false,
   documentationURL: "https://github.com/nitish-mp3/simson-ig",
+});
+window.customCards.push({
+  type: "simson-call-card",
+  name: "Simson Call Relay (compat)",
+  description: "Alias for simson-card — voice calling with WebRTC audio",
+  preview: false,
 });
 
 console.info(
