@@ -24,6 +24,7 @@ from .const import (
     SERVICE_ANSWER_CALL,
     SERVICE_REJECT_CALL,
     SERVICE_HANGUP_CALL,
+    SERVICE_WEBRTC_SIGNAL,
 )
 
 logger = logging.getLogger(__name__)
@@ -87,7 +88,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             await data["client"].close()
         # Unregister services when last entry is removed.
         if not hass.data[DOMAIN]:
-            for svc in (SERVICE_MAKE_CALL, SERVICE_ANSWER_CALL, SERVICE_REJECT_CALL, SERVICE_HANGUP_CALL):
+            for svc in (SERVICE_MAKE_CALL, SERVICE_ANSWER_CALL, SERVICE_REJECT_CALL,
+                        SERVICE_HANGUP_CALL, SERVICE_WEBRTC_SIGNAL):
                 hass.services.async_remove(DOMAIN, svc)
     return unload_ok
 
@@ -180,5 +182,28 @@ def _register_services(hass: HomeAssistant, client: SimsonApiClient) -> None:
             handle_hangup_call,
             schema=vol.Schema({
                 vol.Required("call_id"): str,
+            }),
+        )
+
+    async def handle_webrtc_signal(call: ServiceCall) -> None:
+        call_id = call.data["call_id"]
+        to_node_id = call.data["to_node_id"]
+        signal_type = call.data["signal_type"]
+        data = call.data["data"]
+        try:
+            await client.webrtc_signal(call_id, to_node_id, signal_type, data)
+        except Exception as err:
+            logger.error("Failed to relay WebRTC signal: %s", err)
+
+    if not hass.services.has_service(DOMAIN, SERVICE_WEBRTC_SIGNAL):
+        hass.services.async_register(
+            DOMAIN,
+            SERVICE_WEBRTC_SIGNAL,
+            handle_webrtc_signal,
+            schema=vol.Schema({
+                vol.Required("call_id"): str,
+                vol.Required("to_node_id"): str,
+                vol.Required("signal_type"): str,
+                vol.Required("data"): dict,
             }),
         )

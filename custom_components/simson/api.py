@@ -63,3 +63,17 @@ class SimsonApiClient:
 
     async def hangup_call(self, call_id: str) -> dict:
         return await self._post("/api/hangup", {"call_id": call_id})
+
+    async def webrtc_signal(
+        self,
+        call_id: str,
+        to_node_id: str,
+        signal_type: str,
+        data: dict,
+    ) -> dict:
+        return await self._post("/api/webrtc/signal", {
+            "call_id": call_id,
+            "to_node_id": to_node_id,
+            "signal_type": signal_type,
+            "data": data,
+        })

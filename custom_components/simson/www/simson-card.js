@@ -1,17 +1,17 @@
 /**
- * Simson Call Relay — Lovelace Card v2.0.0
+ * Simson Call Relay — Lovelace Card v2.1.0
  *
  * Full WebRTC voice calling between HA instances.
+ * WebRTC signals travel through HA WebSocket (avoids HTTPS→HTTP mixed content).
  *
  * Config:
  *   type: custom:simson-card
  *   node_id: living_room
  *   target_node_id: office        # optional default dial target
  *   title: Simson                 # optional
- *   addon_url: http://host:8799   # optional, auto-detected
  */
 
-const VERSION = "2.0.0";
+const VERSION = "2.1.0";
 
 // Free STUN servers for NAT traversal.
 const ICE_SERVERS = [
@@ -130,13 +130,16 @@ class SimsonCard extends HTMLElement {
     this._audioQuality = 3; // 0-3 bars
     this._statsInterval = null;
 
-    // SSE
-    this._sse = null;
-    this._sseRetryTimer = null;
+    // HA WebSocket event subscription (for WebRTC signals).
+    this._haEventUnsub = null;
+    this._haEventSubscribed = false;
 
     // Call timer
     this._callStart = null;
     this._timerInterval = null;
+
+    // Call state transition tracking (for triggering WebRTC from entity changes).
+    this._prevCallState = "idle";
 
     // Current call context for WebRTC
     this._currentCallId = null;
@@ -155,7 +158,6 @@ class SimsonCard extends HTMLElement {
       title: config.title || "Simson",
       node_id: config.node_id,
       target_node_id: config.target_node_id || "",
-      addon_url: config.addon_url || "",
     };
     this._targetInput = this._config.target_node_id;
     this._render();
@@ -163,80 +165,57 @@ class SimsonCard extends HTMLElement {
 
   set hass(hass) {
     this._hass = hass;
+    // Subscribe to HA events once we have a hass connection.
+    if (!this._haEventSubscribed) {
+      this._subscribeHAEvents();
+    }
     this._render();
   }
 
   connectedCallback() {
     this._timerInterval = setInterval(() => this._updateTimer(), 1000);
-    this._connectSSE();
+    if (this._hass && !this._haEventSubscribed) {
+      this._subscribeHAEvents();
+    }
   }
 
   disconnectedCallback() {
     clearInterval(this._timerInterval);
-    this._disconnectSSE();
+    this._unsubscribeHAEvents();
     this._cleanupWebRTC();
   }
 
-  // ── Addon API base URL ───────────────────────────────────────────────
+  // ── HA WebSocket event subscription ─────────────────────────────────
+  // WebRTC signals are delivered as HA events, not via direct HTTP.
+  // This works through the existing HTTPS WebSocket connection,
+  // so there are no mixed-content issues regardless of HTTP/HTTPS.
 
-  _addonBase() {
-    if (this._config.addon_url) return this._config.addon_url;
-    return `http://${location.hostname}:8799`;
+  _subscribeHAEvents() {
+    if (!this._hass?.connection) return;
+    this._haEventSubscribed = true;
+    this._hass.connection.subscribeEvents(
+      (haEvent) => this._onHAWebRTCSignal(haEvent.data),
+      "simson_webrtc_signal",
+    ).then(unsub => {
+      this._haEventUnsub = unsub;
+    }).catch(e => {
+      console.warn("Simson: failed to subscribe to HA events:", e);
+      this._haEventSubscribed = false;
+    });
   }
 
-  // ── SSE — real-time events from addon ────────────────────────────────
-
-  _connectSSE() {
-    this._disconnectSSE();
-    const url = `${this._addonBase()}/api/events`;
-    try {
-      this._sse = new EventSource(url);
-      this._sse.onmessage = (ev) => this._handleSSE(JSON.parse(ev.data));
-      this._sse.onerror = () => {
-        this._sse?.close();
-        this._sse = null;
-        this._sseRetryTimer = setTimeout(() => this._connectSSE(), 5000);
-      };
-    } catch (e) {
-      console.warn("Simson SSE connect failed:", e);
+  _unsubscribeHAEvents() {
+    if (this._haEventUnsub) {
+      this._haEventUnsub();
+      this._haEventUnsub = null;
     }
+    this._haEventSubscribed = false;
   }
 
-  _disconnectSSE() {
-    if (this._sseRetryTimer) { clearTimeout(this._sseRetryTimer); this._sseRetryTimer = null; }
-    if (this._sse) { this._sse.close(); this._sse = null; }
-  }
-
-  _handleSSE(event) {
-    switch (event.type) {
-      case "incoming_call":
-        this._currentCallId = event.call_id;
-        this._currentRemoteNode = event.from_node_id;
-        this._isInitiator = false;
-        this._playRingtone();
-        this._render();
-        break;
-
-      case "call_status":
-        if (event.status === "active") {
-          this._currentCallId = event.call_id;
-          this._currentRemoteNode = event.remote_node_id;
-          this._callStart = Date.now();
-          this._startWebRTC();
-        } else if (event.status === "ended" || event.status === "failed") {
-          this._stopRingtone();
-          this._cleanupWebRTC();
-          this._callStart = null;
-          this._currentCallId = null;
-          this._currentRemoteNode = null;
-        }
-        this._render();
-        break;
-
-      case "webrtc_signal":
-        this._handleWebRTCSignal(event);
-        break;
-    }
+  // Called when a simson_webrtc_signal HA event arrives.
+  // event = { call_id, from_node_id, signal_type, data }
+  _onHAWebRTCSignal(event) {
+    this._handleWebRTCSignal(event);
   }
 
   // ── Data helpers (HA entity state) ───────────────────────────────────
@@ -328,7 +307,7 @@ class SimsonCard extends HTMLElement {
       this._pc.addTrack(track, this._localStream);
     });
 
-    // Remote audio element.
+    // Remote audio element — autoplay the incoming stream.
     this._remoteAudio = new Audio();
     this._remoteAudio.autoplay = true;
 
@@ -336,7 +315,7 @@ class SimsonCard extends HTMLElement {
       this._remoteAudio.srcObject = ev.streams[0];
     };
 
-    // ICE candidates → relay through addon API → VPS → remote node.
+    // ICE candidates → relay via HA service → addon API → VPS → remote.
     this._pc.onicecandidate = (ev) => {
       if (ev.candidate) {
         this._sendWebRTCSignal("ice-candidate", {
@@ -347,7 +326,7 @@ class SimsonCard extends HTMLElement {
       }
     };
 
-    // Monitor connection quality.
+    // Monitor connection state.
     this._pc.onconnectionstatechange = () => {
       const state = this._pc?.connectionState;
       if (state === "connected") this._audioQuality = 3;
@@ -356,10 +335,9 @@ class SimsonCard extends HTMLElement {
       this._render();
     };
 
-    // Start quality monitoring.
     this._statsInterval = setInterval(() => this._updateQuality(), 3000);
 
-    // Initiator creates offer, callee waits for offer via SSE.
+    // Initiator creates offer; callee waits for offer via HA event subscription.
     if (this._isInitiator) {
       const offer = await this._pc.createOffer();
       await this._pc.setLocalDescription(offer);
@@ -400,21 +378,18 @@ class SimsonCard extends HTMLElement {
     }
   }
 
+  // Send a WebRTC signal via HA service (server-side relay — no mixed content).
   _sendWebRTCSignal(signalType, data) {
     const callId = this._activeCallAttr("call_id") || this._currentCallId;
     const toNode = this._currentRemoteNode;
-    if (!callId || !toNode) return;
+    if (!callId || !toNode || !this._hass) return;
 
-    fetch(`${this._addonBase()}/api/webrtc/signal`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        call_id: callId,
-        to_node_id: toNode,
-        signal_type: signalType,
-        data: data,
-      }),
-    }).catch(e => console.warn("WebRTC signal send failed:", e));
+    this._hass.callService("simson", "send_webrtc_signal", {
+      call_id: callId,
+      to_node_id: toNode,
+      signal_type: signalType,
+      data: data,
+    }).catch(e => console.warn("Simson: WebRTC signal send failed:", e));
   }
 
   _cleanupWebRTC() {
@@ -508,18 +483,51 @@ class SimsonCard extends HTMLElement {
     const remoteLabel = this._activeCallAttr("remote_label") ||
                         this._activeCallAttr("remote_node_id") ||
                         this._currentRemoteNode || "Unknown";
-    const callId   = this._activeCallAttr("call_id", "") || this._currentCallId || "";
+    const callId    = this._activeCallAttr("call_id", "") || this._currentCallId || "";
     const direction = this._activeCallAttr("direction", "");
 
-    // Sync call context.
+    // Sync call context from entity attributes.
     if (callId && !this._currentCallId) this._currentCallId = callId;
     if (hasCall && !this._currentRemoteNode) {
       this._currentRemoteNode = this._activeCallAttr("remote_node_id", "");
     }
-    if (isActive && !this._callStart) this._callStart = Date.now();
-    if (isIdle) {
-      this._callStart = null;
-      if (this._pc) this._cleanupWebRTC();
+
+    // ── State-transition detection ────────────────────────────────────
+    // React to entity state changes without depending on SSE or direct HTTP.
+    const prev = this._prevCallState;
+    if (prev !== callState) {
+      this._prevCallState = callState;
+
+      if (callState === "incoming" && prev === "idle") {
+        // Incoming call — start ringtone.
+        this._isInitiator = false;
+        this._currentCallId = callId;
+        this._currentRemoteNode = this._activeCallAttr("remote_node_id", "");
+        this._playRingtone();
+
+      } else if (callState === "active" && prev !== "active") {
+        // Call became active — kick off WebRTC.
+        this._stopRingtone();
+        this._isInitiator = (direction === "outgoing");
+        this._currentCallId = callId;
+        this._currentRemoteNode = this._activeCallAttr("remote_node_id", "");
+        if (!this._callStart) this._callStart = Date.now();
+        this._startWebRTC(); // async, will render again when mic granted
+
+      } else if (callState === "idle" && prev !== "idle") {
+        // Call ended — tear down WebRTC.
+        this._stopRingtone();
+        this._cleanupWebRTC();
+        this._callStart = null;
+        this._currentCallId = null;
+        this._currentRemoteNode = null;
+      }
+    }
+
+    // Outgoing ringing — keep call context synced.
+    if (isRinging && !this._currentCallId && callId) {
+      this._currentCallId = callId;
+      this._currentRemoteNode = this._activeCallAttr("remote_node_id", "");
     }
 
     const badgeClass = connected ? "badge-ok" : "badge-err";
@@ -539,7 +547,7 @@ class SimsonCard extends HTMLElement {
 
     // Mic denied warning.
     const micWarning = this._micAllowed === false
-      ? `<div class="mic-denied">\u{1F3A4} Microphone access denied. Click the lock icon in your browser's address bar to allow microphone access, then reload.</div>`
+      ? `<div class="mic-denied">\u{1F3A4} Microphone access denied. Click the lock icon in your browser\u2019s address bar to allow microphone access, then reload.</div>`
       : "";
 
     // Call panel.
