@@ -1,5 +1,5 @@
 /**
- * Simson Call Relay — Lovelace Card v2.3.1
+ * Simson Call Relay — Lovelace Card v2.4.0
  *
  * Full WebRTC voice calling between HA instances.
  * WebRTC signals travel through HA WebSocket (avoids HTTPS→HTTP mixed content).
@@ -11,7 +11,7 @@
  *   title: Simson                 # optional
  */
 
-const VERSION = "2.3.1";
+const VERSION = "2.4.0";
 
 // Free STUN servers for NAT traversal.
 const ICE_SERVERS = [
@@ -171,7 +171,10 @@ class SimsonCard extends HTMLElement {
     // Current call context for WebRTC
     this._currentCallId = null;
     this._currentRemoteNode = null;
-    this._isInitiator = false;
+    // Perfect negotiation: polite peer rolls back on offer collision.
+    // Determined by node_id string comparison — no reliance on call direction.
+    this._polite = false;
+    this._makingOffer = false;   // true while createOffer → setLocalDescription in flight
     this._pendingCandidates = [];
 
     // Ringtone
@@ -294,7 +297,11 @@ class SimsonCard extends HTMLElement {
       // Call just became active — start WebRTC IMMEDIATELY.
       this._currentCallId = call_id;
       this._currentRemoteNode = remote_node_id;
-      this._isInitiator = (direction === "outgoing");
+      // Perfect negotiation: polite = lexicographically smaller node_id backs off on collision.
+      // This is deterministic and requires no coordination — works even if direction is wrong.
+      this._polite = (this._config.node_id || "") < (remote_node_id || "");
+      console.info("Simson: WebRTC role: %s (node=%s remote=%s dir=%s)",
+        this._polite ? "polite" : "impolite", this._config.node_id, remote_node_id, direction);
       if (!this._callStart) this._callStart = Date.now();
       this._stopRingtone();
       this._startWebRTC();
@@ -313,7 +320,6 @@ class SimsonCard extends HTMLElement {
     const { call_id, from_node_id, from_label } = event;
     console.info("Simson: ← incoming_call event: call=%s from=%s (%s)",
       call_id, from_node_id, from_label);
-    this._isInitiator = false;
     this._currentCallId = call_id;
     this._currentRemoteNode = from_node_id;
     this._playRingtone();
@@ -350,7 +356,6 @@ class SimsonCard extends HTMLElement {
     const root = this._root();
     const target = root.querySelector("#target-input")?.value?.trim();
     if (!target) return;
-    this._isInitiator = true;
     this._currentRemoteNode = target;
     this._callStart = null;
     this._callService("make_call", { target_node_id: target, call_type: "voice" });
@@ -390,8 +395,8 @@ class SimsonCard extends HTMLElement {
     if (this._pc) return;
     if (this._startingWebRTC) return; // guard against concurrent calls
     this._startingWebRTC = true;
-    console.info("Simson: starting WebRTC (initiator=%s, callId=%s, remoteNode=%s)",
-      this._isInitiator, this._currentCallId, this._currentRemoteNode);
+    console.info("Simson: starting WebRTC (polite=%s, callId=%s, remoteNode=%s)",
+      this._polite, this._currentCallId, this._currentRemoteNode);
 
     // Check secure context — getUserMedia requires HTTPS (or localhost).
     if (!window.isSecureContext) {
@@ -425,6 +430,7 @@ class SimsonCard extends HTMLElement {
     // Create peer connection.
     this._pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
     this._pendingCandidates = [];
+    this._makingOffer = false;
 
     // Add local audio tracks.
     this._localStream.getTracks().forEach(track => {
@@ -458,6 +464,21 @@ class SimsonCard extends HTMLElement {
       }
     };
 
+    // Perfect negotiation — onnegotiationneeded fires when tracks are added.
+    // Both peers attempt to create an offer; collisions are resolved by politeness.
+    this._pc.onnegotiationneeded = async () => {
+      try {
+        this._makingOffer = true;
+        console.info("Simson: negotiation needed — creating offer (polite=%s)", this._polite);
+        await this._pc.setLocalDescription();
+        this._sendWebRTCSignal("offer", { sdp: this._pc.localDescription.sdp, type: this._pc.localDescription.type });
+      } catch (e) {
+        console.error("Simson: onnegotiationneeded error:", e);
+      } finally {
+        this._makingOffer = false;
+      }
+    };
+
     // Monitor connection state.
     this._pc.onconnectionstatechange = () => {
       const state = this._pc?.connectionState;
@@ -468,7 +489,6 @@ class SimsonCard extends HTMLElement {
     };
 
     this._statsInterval = setInterval(() => this._updateQuality(), 3000);
-
     this._startingWebRTC = false;
 
     // If an offer arrived while getUserMedia was pending, process it now.
@@ -477,19 +497,8 @@ class SimsonCard extends HTMLElement {
       const offer = this._pendingOffer;
       this._pendingOffer = null;
       await this._handleWebRTCSignal(offer);
-      return;
     }
-
-    // Initiator creates offer; callee waits for offer via HA event subscription.
-    if (this._isInitiator) {
-      console.info("Simson: creating SDP offer...");
-      const offer = await this._pc.createOffer();
-      await this._pc.setLocalDescription(offer);
-      console.info("Simson: sending SDP offer to %s", this._currentRemoteNode);
-      this._sendWebRTCSignal("offer", { sdp: offer.sdp, type: offer.type });
-    } else {
-      console.info("Simson: waiting for SDP offer from remote...");
-    }
+    // onnegotiationneeded fires automatically after addTrack() — no manual createOffer needed.
   }
 
   async _handleWebRTCSignal(event) {
@@ -511,11 +520,25 @@ class SimsonCard extends HTMLElement {
       }
       if (!this._pc) await this._startWebRTC();
       if (!this._pc) { console.error("Simson: cannot process offer — no PeerConnection"); return; }
+
+      // Perfect negotiation collision detection:
+      // If we are also making an offer at the same moment, the polite peer backs off.
+      const offerCollision = (this._makingOffer || this._pc.signalingState !== "stable");
+      if (offerCollision) {
+        if (!this._polite) {
+          // Impolite: ignore the incoming offer — our offer takes precedence.
+          console.info("Simson: offer collision — impolite peer ignoring remote offer");
+          return;
+        }
+        // Polite: roll back our own offer so we can process the remote one.
+        console.info("Simson: offer collision — polite peer rolling back to accept remote offer");
+        await this._pc.setLocalDescription({ type: "rollback" });
+      }
+
       await this._pc.setRemoteDescription(new RTCSessionDescription(data));
-      const answer = await this._pc.createAnswer();
-      await this._pc.setLocalDescription(answer);
+      await this._pc.setLocalDescription();
       console.info("Simson: sending SDP answer to %s", this._currentRemoteNode);
-      this._sendWebRTCSignal("answer", { sdp: answer.sdp, type: answer.type });
+      this._sendWebRTCSignal("answer", { sdp: this._pc.localDescription.sdp, type: this._pc.localDescription.type });
       for (const c of this._pendingCandidates) {
         await this._pc.addIceCandidate(new RTCIceCandidate(c));
       }
@@ -523,12 +546,14 @@ class SimsonCard extends HTMLElement {
 
     } else if (signal_type === "answer") {
       console.info("Simson: received SDP answer from %s", from_node_id);
-      if (this._pc) {
+      if (this._pc && this._pc.signalingState === "have-local-offer") {
         await this._pc.setRemoteDescription(new RTCSessionDescription(data));
         for (const c of this._pendingCandidates) {
           await this._pc.addIceCandidate(new RTCIceCandidate(c));
         }
         this._pendingCandidates = [];
+      } else if (this._pc) {
+        console.warn("Simson: received answer but signalingState=%s — ignoring", this._pc.signalingState);
       } else {
         console.warn("Simson: received answer but no PeerConnection exists");
       }
@@ -573,6 +598,7 @@ class SimsonCard extends HTMLElement {
     this._remoteAudio.pause();
     this._remoteAudio.srcObject = null;
     this._pendingOffer = null;
+    this._makingOffer = false;
     this._muted = false;
     this._audioQuality = 3;
     this._pendingCandidates = [];
@@ -671,17 +697,17 @@ class SimsonCard extends HTMLElement {
 
       if (callState === "incoming" && prev === "idle") {
         // Incoming call — start ringtone.
-        this._isInitiator = false;
         this._currentCallId = callId;
         this._currentRemoteNode = this._activeCallAttr("remote_node_id", "");
+        this._polite = (this._config.node_id || "") < (this._currentRemoteNode || "");
         this._playRingtone();
 
       } else if (callState === "active" && prev !== "active") {
-        // Call became active — kick off WebRTC.
+        // Call became active — kick off WebRTC if event-driven path didn't already.
         this._stopRingtone();
-        this._isInitiator = (direction === "outgoing");
         this._currentCallId = callId;
         this._currentRemoteNode = this._activeCallAttr("remote_node_id", "");
+        this._polite = (this._config.node_id || "") < (this._currentRemoteNode || "");
         if (!this._callStart) this._callStart = Date.now();
         this._startWebRTC(); // async, will render again when mic granted
 
@@ -810,7 +836,6 @@ class SimsonCard extends HTMLElement {
       btn.addEventListener("click", () => {
         const target = btn.dataset.target;
         if (target) {
-          this._isInitiator = true;
           this._currentRemoteNode = target;
           this._callStart = null;
           this._callService("make_call", { target_node_id: target, call_type: "voice" });
