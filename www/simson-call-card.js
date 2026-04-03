@@ -1,5 +1,5 @@
 /**
- * Simson Call Relay — Lovelace Card v2.3.0
+ * Simson Call Relay — Lovelace Card v2.3.1
  *
  * Full WebRTC voice calling between HA instances.
  * WebRTC signals travel through HA WebSocket (avoids HTTPS→HTTP mixed content).
@@ -11,7 +11,7 @@
  *   title: Simson                 # optional
  */
 
-const VERSION = "2.3.0";
+const VERSION = "2.3.1";
 
 // Free STUN servers for NAT traversal.
 const ICE_SERVERS = [
@@ -140,12 +140,20 @@ class SimsonCard extends HTMLElement {
     // WebRTC state
     this._pc = null;
     this._localStream = null;
-    this._remoteAudio = null;
     this._muted = false;
     this._micAllowed = null; // null=unknown, true=allowed, false=denied
     this._audioQuality = 3; // 0-3 bars
     this._statsInterval = null;
     this._startingWebRTC = false; // guard against concurrent _startWebRTC calls
+    this._pendingOffer = null;    // buffer SDP offer that arrives while getUserMedia is pending
+
+    // Persistent audio element — lives in shadow root, NOT in innerHTML.
+    // Keeping it out of the re-rendered HTML means it survives _render() calls
+    // and avoids browser autoplay-policy blocks on detached Audio() objects.
+    this._remoteAudio = document.createElement("audio");
+    this._remoteAudio.autoplay = true;
+    this._remoteAudio.setAttribute("playsinline", "");
+    this.shadowRoot.appendChild(this._remoteAudio);
 
     // HA WebSocket event subscription (for WebRTC signals + call status).
     this._haEventUnsub = null;
@@ -423,12 +431,20 @@ class SimsonCard extends HTMLElement {
       this._pc.addTrack(track, this._localStream);
     });
 
-    // Remote audio element — autoplay the incoming stream.
-    this._remoteAudio = new Audio();
-    this._remoteAudio.autoplay = true;
-
+    // Remote audio element — already created in constructor and attached.
     this._pc.ontrack = (ev) => {
-      this._remoteAudio.srcObject = ev.streams[0];
+      console.info("Simson: remote audio track received, %d stream(s)", ev.streams.length);
+      if (ev.streams && ev.streams[0]) {
+        this._remoteAudio.srcObject = ev.streams[0];
+      } else {
+        // Fallback: create a MediaStream from the track directly.
+        const ms = new MediaStream();
+        ms.addTrack(ev.track);
+        this._remoteAudio.srcObject = ms;
+      }
+      this._remoteAudio.play().catch(e =>
+        console.warn("Simson: remote audio play() blocked (will retry on user gesture):", e)
+      );
     };
 
     // ICE candidates → relay via HA service → addon API → VPS → remote.
@@ -455,6 +471,15 @@ class SimsonCard extends HTMLElement {
 
     this._startingWebRTC = false;
 
+    // If an offer arrived while getUserMedia was pending, process it now.
+    if (this._pendingOffer) {
+      console.info("Simson: processing buffered SDP offer");
+      const offer = this._pendingOffer;
+      this._pendingOffer = null;
+      await this._handleWebRTCSignal(offer);
+      return;
+    }
+
     // Initiator creates offer; callee waits for offer via HA event subscription.
     if (this._isInitiator) {
       console.info("Simson: creating SDP offer...");
@@ -478,6 +503,12 @@ class SimsonCard extends HTMLElement {
 
     if (signal_type === "offer") {
       console.info("Simson: received SDP offer from %s", from_node_id);
+      if (this._startingWebRTC) {
+        // getUserMedia is still pending — buffer this offer and process after startup.
+        console.info("Simson: WebRTC starting, buffering SDP offer");
+        this._pendingOffer = event;
+        return;
+      }
       if (!this._pc) await this._startWebRTC();
       if (!this._pc) { console.error("Simson: cannot process offer — no PeerConnection"); return; }
       await this._pc.setRemoteDescription(new RTCSessionDescription(data));
@@ -538,10 +569,10 @@ class SimsonCard extends HTMLElement {
       this._localStream.getTracks().forEach(t => t.stop());
       this._localStream = null;
     }
-    if (this._remoteAudio) {
-      this._remoteAudio.srcObject = null;
-      this._remoteAudio = null;
-    }
+    // Stop remote audio but keep the element alive in shadow root for reuse.
+    this._remoteAudio.pause();
+    this._remoteAudio.srcObject = null;
+    this._pendingOffer = null;
     this._muted = false;
     this._audioQuality = 3;
     this._pendingCandidates = [];
