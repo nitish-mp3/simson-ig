@@ -13,7 +13,7 @@
  *   title: Simson                 # optional
  */
 
-const VERSION = "3.0.0";
+const VERSION = "3.1.0";
 
 // Free STUN servers for NAT traversal.
 const ICE_SERVERS = [
@@ -290,6 +290,15 @@ class SimsonCard extends HTMLElement {
     // Browser notification (v3.0.0)
     this._notifPermission = typeof Notification !== "undefined" ? Notification.permission : "denied";
     this._activeNotification = null;
+
+    // User presence & per-user routing
+    this._userHeartbeatInterval = null;
+    this._haRemoteUsersUnsub = null;
+    this._remoteUsers = [];
+    this._userPickerEl = null;
+    this._userPickerNodeId = "";
+    this._userPickerTargetId = "";
+    this._ignoredCallId = null;
   }
 
   setConfig(config) {
@@ -322,6 +331,11 @@ class SimsonCard extends HTMLElement {
     if (!this._haEventSubscribed) {
       this._subscribeHAEvents();
     }
+    // Start user heartbeat (once).
+    if (!this._userHeartbeatInterval && hass?.user) {
+      this._sendUserHeartbeat();
+      this._userHeartbeatInterval = setInterval(() => this._sendUserHeartbeat(), 20000);
+    }
     // Load targets from addon API (once).
     if (!this._targetsLoaded && !this._targetsLoading) {
       this._loadTargets();
@@ -338,9 +352,14 @@ class SimsonCard extends HTMLElement {
 
   disconnectedCallback() {
     clearInterval(this._timerInterval);
+    if (this._userHeartbeatInterval) {
+      clearInterval(this._userHeartbeatInterval);
+      this._userHeartbeatInterval = null;
+    }
     this._unsubscribeHAEvents();
     this._cleanupWebRTC();
     this._removePopup();
+    this._removeUserPicker();
     this._dismissBrowserNotification();
   }
 
@@ -398,6 +417,17 @@ class SimsonCard extends HTMLElement {
     }).catch(e => {
       console.warn("Simson: failed to subscribe to targets_result events:", e);
     });
+
+    // 5. Remote users result — receives user list from a remote node.
+    this._hass.connection.subscribeEvents(
+      (haEvent) => this._onHARemoteUsers(haEvent.data),
+      "simson_remote_users",
+    ).then(unsub => {
+      this._haRemoteUsersUnsub = unsub;
+      console.info("Simson: subscribed to simson_remote_users events");
+    }).catch(e => {
+      console.warn("Simson: failed to subscribe to remote_users events:", e);
+    });
   }
 
   _unsubscribeHAEvents() {
@@ -405,6 +435,7 @@ class SimsonCard extends HTMLElement {
     if (this._haStatusUnsub) { this._haStatusUnsub(); this._haStatusUnsub = null; }
     if (this._haIncomingUnsub) { this._haIncomingUnsub(); this._haIncomingUnsub = null; }
     if (this._haTargetsUnsub) { this._haTargetsUnsub(); this._haTargetsUnsub = null; }
+    if (this._haRemoteUsersUnsub) { this._haRemoteUsersUnsub(); this._haRemoteUsersUnsub = null; }
     this._haEventSubscribed = false;
   }
 
@@ -450,7 +481,13 @@ class SimsonCard extends HTMLElement {
   }
 
   _onHAIncomingCall(event) {
-    const { call_id, from_node_id, from_label, call_type } = event;
+    const { call_id, from_node_id, from_label, call_type, target_user_id } = event;
+    // Per-user filtering: if a specific user is targeted and it's not us, ignore.
+    if (target_user_id && this._hass?.user?.id && target_user_id !== this._hass.user.id) {
+      console.info("Simson: ignoring incoming call for user %s (we are %s)", target_user_id, this._hass.user.id);
+      this._ignoredCallId = call_id;
+      return;
+    }
     console.info("Simson: ← incoming_call event: call=%s from=%s (%s)",
       call_id, from_node_id, from_label);
     this._currentCallId = call_id;
@@ -461,6 +498,13 @@ class SimsonCard extends HTMLElement {
     this._showIncomingPopup();
     this._showBrowserNotification(this._incomingFrom, this._incomingCallType);
     this._render();
+  }
+
+  _onHARemoteUsers(data) {
+    if (data && Array.isArray(data.users)) {
+      this._remoteUsers = data.users;
+      this._showUserPickerPopup();
+    }
   }
 
   _onHATargetsResult(data) {
@@ -832,6 +876,125 @@ class SimsonCard extends HTMLElement {
     return this._targets.filter(t => t.type === type);
   }
 
+  // ── User presence heartbeat ──────────────────────────────────────────
+
+  _sendUserHeartbeat() {
+    if (!this._hass?.user) return;
+    this._callService("user_heartbeat", {
+      user_id: this._hass.user.id,
+      user_name: this._hass.user.name,
+    });
+  }
+
+  // ── User picker popup ───────────────────────────────────────────────
+
+  _showUserPickerPopup() {
+    this._removeUserPicker();
+    const nodeId = this._userPickerNodeId;
+    const users = this._remoteUsers || [];
+
+    const popup = document.createElement("div");
+    popup.id = "simson-user-picker";
+    popup.innerHTML = `
+      <style>
+        #simson-user-picker {
+          position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+          background: rgba(0,0,0,0.85); z-index: 99999;
+          display: flex; align-items: center; justify-content: center;
+          animation: simson-picker-fade .3s ease;
+          font-family: system-ui, -apple-system, sans-serif;
+        }
+        @keyframes simson-picker-fade { from { opacity: 0; } to { opacity: 1; } }
+        .simson-picker-card {
+          background: #1a1a1a; border: 2px solid #1565c0; border-radius: 20px;
+          padding: 28px 24px; text-align: center; min-width: 280px; max-width: 380px;
+          animation: simson-picker-slide .3s ease;
+          box-shadow: 0 20px 60px rgba(0,0,0,.6); color: #e1e1e1;
+        }
+        @keyframes simson-picker-slide {
+          from { transform: translateY(30px); opacity: 0; } to { transform: translateY(0); opacity: 1; }
+        }
+        .simson-picker-icon { font-size: 36px; margin-bottom: 10px; }
+        .simson-picker-title { font-size: 20px; font-weight: 700; margin-bottom: 4px; }
+        .simson-picker-subtitle { font-size: 13px; color: #888; margin-bottom: 20px; }
+        .simson-picker-users { display: flex; flex-direction: column; gap: 8px; margin-bottom: 16px; }
+        .simson-picker-btn {
+          border: none; border-radius: 10px; padding: 12px 16px; font-size: 14px;
+          font-weight: 600; cursor: pointer; transition: background .15s, transform .1s;
+          display: flex; align-items: center; gap: 8px; justify-content: center; color: #fff;
+        }
+        .simson-picker-btn:active { transform: scale(.96); }
+        .simson-picker-btn-all { background: #2e7d32; }
+        .simson-picker-btn-all:hover { background: #388e3c; }
+        .simson-picker-btn-user { background: #1565c0; }
+        .simson-picker-btn-user:hover { background: #1976d2; }
+        .simson-picker-btn-cancel { background: #444; width: 100%; }
+        .simson-picker-btn-cancel:hover { background: #555; }
+        .simson-picker-empty { color: #666; font-size: 13px; font-style: italic; padding: 8px 0; }
+      </style>
+      <div class="simson-picker-card">
+        <div class="simson-picker-icon">\u{1F465}</div>
+        <div class="simson-picker-title">Call ${this._escapeHtml(nodeId)}</div>
+        <div class="simson-picker-subtitle">${users.length ? users.length + " user(s) online" : "No users online"}</div>
+        <div class="simson-picker-users">
+          <button class="simson-picker-btn simson-picker-btn-all" data-action="all">\u{1F4DE} Call All Users</button>
+          ${users.length === 0 ? '<div class="simson-picker-empty">No individual users detected</div>' : ""}
+          ${users.map(u => `
+            <button class="simson-picker-btn simson-picker-btn-user" data-user-id="${this._escapeHtml(u.user_id)}" data-user-name="${this._escapeHtml(u.user_name)}">
+              \u{1F464} ${this._escapeHtml(u.user_name)}
+            </button>
+          `).join("")}
+        </div>
+        <button class="simson-picker-btn simson-picker-btn-cancel" data-action="cancel">\u2715 Cancel</button>
+      </div>
+    `;
+
+    document.body.appendChild(popup);
+    this._userPickerEl = popup;
+
+    // "Call All" — call the node with no target_user_id.
+    popup.querySelector("[data-action='all']")?.addEventListener("click", () => {
+      this._removeUserPicker();
+      this._currentRemoteNode = nodeId;
+      this._callStart = null;
+      const data = { target_node_id: nodeId, call_type: "voice" };
+      if (this._userPickerTargetId) data.target_id = this._userPickerTargetId;
+      this._callService("make_call", data);
+    });
+
+    // Individual user buttons.
+    popup.querySelectorAll("[data-user-id]").forEach(btn => {
+      btn.addEventListener("click", () => {
+        const userId = btn.dataset.userId;
+        const userName = btn.dataset.userName;
+        this._removeUserPicker();
+        this._currentRemoteNode = nodeId;
+        this._callStart = null;
+        const data = {
+          target_node_id: nodeId,
+          call_type: "voice",
+          target_user_id: userId,
+          target_user_name: userName,
+        };
+        if (this._userPickerTargetId) data.target_id = this._userPickerTargetId;
+        this._callService("make_call", data);
+      });
+    });
+
+    // Cancel.
+    popup.querySelector("[data-action='cancel']")?.addEventListener("click", () => {
+      this._removeUserPicker();
+    });
+  }
+
+  _removeUserPicker() {
+    if (this._userPickerEl) {
+      this._userPickerEl.remove();
+      this._userPickerEl = null;
+    }
+    document.getElementById("simson-user-picker")?.remove();
+  }
+
   // ── Incoming call popup overlay ──────────────────────────────────────
 
   _showIncomingPopup() {
@@ -1002,15 +1165,20 @@ class SimsonCard extends HTMLElement {
       console.info("Simson: state transition %s → %s (direction=%s, callId=%s)", prev, callState, direction, callId);
 
       if (callState === "incoming" && prev === "idle") {
-        // Incoming call — start ringtone and show popup.
-        this._currentCallId = callId;
-        this._currentRemoteNode = this._activeCallAttr("remote_node_id", "");
-        this._polite = (this._config.node_id || "") < (this._currentRemoteNode || "");
-        this._incomingFrom = this._activeCallAttr("remote_label") || this._currentRemoteNode || "Unknown";
-        this._incomingCallType = this._activeCallAttr("call_type") || "voice";
-        this._playRingtone();
-        this._showIncomingPopup();
-        this._showBrowserNotification(this._incomingFrom, this._incomingCallType);
+        // Skip if the event-driven path already decided to ignore this call (wrong user).
+        if (this._ignoredCallId && this._ignoredCallId === callId) {
+          // Do nothing — this call is not for us.
+        } else {
+          // Incoming call — start ringtone and show popup.
+          this._currentCallId = callId;
+          this._currentRemoteNode = this._activeCallAttr("remote_node_id", "");
+          this._polite = (this._config.node_id || "") < (this._currentRemoteNode || "");
+          this._incomingFrom = this._activeCallAttr("remote_label") || this._currentRemoteNode || "Unknown";
+          this._incomingCallType = this._activeCallAttr("call_type") || "voice";
+          this._playRingtone();
+          this._showIncomingPopup();
+          this._showBrowserNotification(this._incomingFrom, this._incomingCallType);
+        }
 
       } else if (callState === "active" && prev !== "active") {
         // Call became active — kick off WebRTC if event-driven path didn't already.
@@ -1032,6 +1200,7 @@ class SimsonCard extends HTMLElement {
         this._callStart = null;
         this._currentCallId = null;
         this._currentRemoteNode = null;
+        this._ignoredCallId = null;
       }
     }
 
@@ -1158,9 +1327,10 @@ class SimsonCard extends HTMLElement {
       btn.addEventListener("click", () => {
         const target = btn.dataset.target;
         if (target) {
-          this._currentRemoteNode = target;
-          this._callStart = null;
-          this._callService("make_call", { target_node_id: target, call_type: "voice" });
+          // Show user picker for quick-dial targets too.
+          this._userPickerNodeId = target;
+          this._userPickerTargetId = "";
+          this._callService("get_remote_users", { node_id: target });
         }
       });
     });
@@ -1170,8 +1340,16 @@ class SimsonCard extends HTMLElement {
       btn.addEventListener("click", () => {
         const targetId = btn.dataset.targetId;
         const targetType = btn.dataset.targetType;
-        if (targetId) {
-          this._currentRemoteNode = btn.dataset.nodeId || targetId;
+        const nodeId = btn.dataset.nodeId || targetId;
+        if (!targetId) return;
+
+        if (targetType === "node") {
+          // Fetch remote users and show picker before calling.
+          this._userPickerNodeId = nodeId;
+          this._userPickerTargetId = targetId;
+          this._callService("get_remote_users", { node_id: nodeId });
+        } else {
+          this._currentRemoteNode = nodeId;
           this._callStart = null;
           this._callService("make_call", { target_id: targetId, call_type: targetType === "asterisk" ? "sip" : "voice" });
         }

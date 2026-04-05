@@ -50,12 +50,18 @@ class SimsonApiClient:
         return await self._get("/api/calls")
 
     async def make_call(self, target_node_id: str = "", call_type: str = "voice",
-                        target_id: str = "") -> dict:
+                        target_id: str = "",
+                        target_user_id: str = "",
+                        target_user_name: str = "") -> dict:
         data = {"call_type": call_type}
         if target_id:
             data["target_id"] = target_id
         if target_node_id:
             data["target_node_id"] = target_node_id
+        if target_user_id:
+            data["target_user_id"] = target_user_id
+        if target_user_name:
+            data["target_user_name"] = target_user_name
         return await self._post("/api/call", data)
 
     async def answer_call(self, call_id: str) -> dict:
@@ -83,3 +89,15 @@ class SimsonApiClient:
             "signal_type": signal_type,
             "data": data,
         })
+
+    async def user_heartbeat(self, user_id: str, user_name: str) -> dict:
+        return await self._post("/api/user/heartbeat", {
+            "user_id": user_id,
+            "user_name": user_name,
+        })
+
+    async def user_unregister(self, user_id: str) -> dict:
+        return await self._post("/api/user/unregister", {"user_id": user_id})
+
+    async def get_remote_users(self, node_id: str) -> dict:
+        return await self._post("/api/remote-users", {"node_id": node_id})

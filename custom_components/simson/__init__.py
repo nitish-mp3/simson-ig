@@ -26,6 +26,8 @@ from .const import (
     SERVICE_HANGUP_CALL,
     SERVICE_WEBRTC_SIGNAL,
     SERVICE_GET_TARGETS,
+    SERVICE_USER_HEARTBEAT,
+    SERVICE_GET_REMOTE_USERS,
 )
 
 logger = logging.getLogger(__name__)
@@ -90,7 +92,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         # Unregister services when last entry is removed.
         if not hass.data[DOMAIN]:
             for svc in (SERVICE_MAKE_CALL, SERVICE_ANSWER_CALL, SERVICE_REJECT_CALL,
-                        SERVICE_HANGUP_CALL, SERVICE_WEBRTC_SIGNAL, SERVICE_GET_TARGETS):
+                        SERVICE_HANGUP_CALL, SERVICE_WEBRTC_SIGNAL, SERVICE_GET_TARGETS,
+                        SERVICE_USER_HEARTBEAT, SERVICE_GET_REMOTE_USERS):
                 hass.services.async_remove(DOMAIN, svc)
     return unload_ok
 
@@ -123,11 +126,15 @@ def _register_services(hass: HomeAssistant, client: SimsonApiClient) -> None:
         target = call.data.get("target_node_id", "")
         target_id = call.data.get("target_id", "")
         call_type = call.data.get("call_type", "voice")
+        target_user_id = call.data.get("target_user_id", "")
+        target_user_name = call.data.get("target_user_name", "")
         try:
             result = await client.make_call(
                 target_node_id=target,
                 call_type=call_type,
                 target_id=target_id,
+                target_user_id=target_user_id,
+                target_user_name=target_user_name,
             )
             logger.info("Call initiated: %s", result)
         except Exception as err:
@@ -164,6 +171,8 @@ def _register_services(hass: HomeAssistant, client: SimsonApiClient) -> None:
                 vol.Optional("target_node_id", default=""): str,
                 vol.Optional("target_id", default=""): str,
                 vol.Optional("call_type", default="voice"): str,
+                vol.Optional("target_user_id", default=""): str,
+                vol.Optional("target_user_name", default=""): str,
             }),
         )
         hass.services.async_register(
@@ -228,4 +237,41 @@ def _register_services(hass: HomeAssistant, client: SimsonApiClient) -> None:
             DOMAIN,
             SERVICE_GET_TARGETS,
             handle_get_targets,
+        )
+
+    async def handle_user_heartbeat(call: ServiceCall) -> None:
+        user_id = call.data["user_id"]
+        user_name = call.data["user_name"]
+        try:
+            await client.user_heartbeat(user_id, user_name)
+        except Exception as err:
+            logger.error("Failed to send user heartbeat: %s", err)
+
+    if not hass.services.has_service(DOMAIN, SERVICE_USER_HEARTBEAT):
+        hass.services.async_register(
+            DOMAIN,
+            SERVICE_USER_HEARTBEAT,
+            handle_user_heartbeat,
+            schema=vol.Schema({
+                vol.Required("user_id"): str,
+                vol.Required("user_name"): str,
+            }),
+        )
+
+    async def handle_get_remote_users(call: ServiceCall) -> None:
+        node_id = call.data["node_id"]
+        try:
+            result = await client.get_remote_users(node_id)
+            hass.bus.async_fire("simson_remote_users", result)
+        except Exception as err:
+            logger.error("Failed to get remote users: %s", err)
+
+    if not hass.services.has_service(DOMAIN, SERVICE_GET_REMOTE_USERS):
+        hass.services.async_register(
+            DOMAIN,
+            SERVICE_GET_REMOTE_USERS,
+            handle_get_remote_users,
+            schema=vol.Schema({
+                vol.Required("node_id"): str,
+            }),
         )
