@@ -28,6 +28,7 @@ from .const import (
     SERVICE_GET_TARGETS,
     SERVICE_USER_HEARTBEAT,
     SERVICE_GET_REMOTE_USERS,
+    SERVICE_GET_CALL_HISTORY,
 )
 
 logger = logging.getLogger(__name__)
@@ -93,7 +94,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         if not hass.data[DOMAIN]:
             for svc in (SERVICE_MAKE_CALL, SERVICE_ANSWER_CALL, SERVICE_REJECT_CALL,
                         SERVICE_HANGUP_CALL, SERVICE_WEBRTC_SIGNAL, SERVICE_GET_TARGETS,
-                        SERVICE_USER_HEARTBEAT, SERVICE_GET_REMOTE_USERS):
+                        SERVICE_USER_HEARTBEAT, SERVICE_GET_REMOTE_USERS,
+                        SERVICE_GET_CALL_HISTORY):
                 hass.services.async_remove(DOMAIN, svc)
     return unload_ok
 
@@ -273,5 +275,23 @@ def _register_services(hass: HomeAssistant, client: SimsonApiClient) -> None:
             handle_get_remote_users,
             schema=vol.Schema({
                 vol.Required("node_id"): str,
+            }),
+        )
+
+    async def handle_get_call_history(call: ServiceCall) -> None:
+        limit = call.data.get("limit", 50)
+        try:
+            result = await client.get_call_history(limit)
+            hass.bus.async_fire("simson_call_history", result)
+        except Exception as err:
+            logger.error("Failed to get call history: %s", err)
+
+    if not hass.services.has_service(DOMAIN, SERVICE_GET_CALL_HISTORY):
+        hass.services.async_register(
+            DOMAIN,
+            SERVICE_GET_CALL_HISTORY,
+            handle_get_call_history,
+            schema=vol.Schema({
+                vol.Optional("limit", default=50): int,
             }),
         )
