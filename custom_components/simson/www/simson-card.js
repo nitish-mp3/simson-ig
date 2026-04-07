@@ -1,16 +1,19 @@
 /**
- * Simson Call Relay — Lovelace Card v4.0.0
+ * Simson Call Relay — Lovelace Card v4.1.0
  *
  * Full WebRTC voice calling between HA instances.
+ * v4.1.0: YAML target_nodes compat, HTTP mic graceful fallback, Asterisk/SIP discovery.
  * v4.0.0: Auto-detect node, inline dropdowns, call history, professional UI.
  *
  * Config (all optional):
  *   type: custom:simson-card
  *   title: Simson              # optional
  *   node_id: living_room       # auto-detected if omitted
+ *   target_nodes:              # pre-populated quick-dial nodes
+ *     - node_id: office2
  */
 
-const VERSION = "4.0.0";
+const VERSION = "4.1.0";
 
 const ICE_SERVERS = [
   { urls: "stun:stun.l.google.com:19302" },
@@ -366,17 +369,37 @@ class SimsonCard extends HTMLElement {
   // ── Config ──────────────────────────────────────────────────────────
 
   setConfig(config) {
-    // node_id is now optional — auto-detected from entities.
+    // node_id is optional — auto-detected from entities or extracted from old entity names.
     let nodeId = config.node_id || "";
     if (!nodeId && config.connection_entity) {
       const m = config.connection_entity.match(/^sensor\.simson_(.+)_connection$/);
       if (m) nodeId = m[1];
     }
+    if (!nodeId && config.call_state_entity) {
+      const m = config.call_state_entity.match(/^sensor\.simson_(.+)_call_state$/);
+      if (m) nodeId = m[1];
+    }
+    if (!nodeId && config.calls_count_entity) {
+      const m = config.calls_count_entity.match(/^sensor\.simson_(.+)_calls_count$/);
+      if (m) nodeId = m[1];
+    }
+
+    // target_nodes supports both string shorthand and {node_id: "..."} objects.
+    const targetNodes = (config.target_nodes || [])
+      .map(t => (typeof t === "string" ? t : t.node_id))
+      .filter(Boolean);
 
     this._config = {
       title: config.title || "Simson",
       node_id: nodeId,
+      target_nodes: targetNodes,
     };
+
+    // Pre-seed cache slots so configured nodes immediately appear in suggestions.
+    targetNodes.forEach(n => {
+      if (!this._usersCache[n]) this._usersCache[n] = { users: [], timestamp: 0 };
+    });
+
     this._render();
   }
 
@@ -699,30 +722,28 @@ class SimsonCard extends HTMLElement {
     if (this._startingWebRTC) return;
     this._startingWebRTC = true;
 
-    if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) {
+    // Try mic — works on HTTP for localhost/local IPs too. Never hard-block on context.
+    if (navigator.mediaDevices?.getUserMedia) {
+      try {
+        this._localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        this._micAllowed = true;
+      } catch (e) {
+        this._micAllowed = false;
+        // Continue anyway — remote audio still plays without microphone access.
+      }
+    } else {
       this._micAllowed = false;
-      this._startingWebRTC = false;
-      this._render();
-      return;
-    }
-
-    try {
-      this._localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      this._micAllowed = true;
-    } catch (e) {
-      this._micAllowed = false;
-      this._startingWebRTC = false;
-      this._render();
-      return;
     }
 
     this._pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
     this._pendingCandidates = [];
     this._makingOffer = false;
 
-    this._localStream.getTracks().forEach(track => {
-      this._pc.addTrack(track, this._localStream);
-    });
+    if (this._localStream) {
+      this._localStream.getTracks().forEach(track => {
+        this._pc.addTrack(track, this._localStream);
+      });
+    }
 
     this._pc.ontrack = (ev) => {
       if (ev.streams?.[0]) {
@@ -1198,12 +1219,11 @@ class SimsonCard extends HTMLElement {
     if (this._micAllowed === false) {
       if (!window.isSecureContext) {
         warningHtml = `<div class="warning-box warning-http">
-          \u{1F512} <b>Audio requires HTTPS.</b> Microphone access is blocked on HTTP.
-          Use your <b>HTTPS URL</b> or the <b>HA Companion app</b> for voice calls.
+          ⚠️ Microphone unavailable on HTTP — you can still <b>receive audio</b>. Use HTTPS for full voice.
         </div>`;
       } else {
         warningHtml = `<div class="warning-box warning-mic">
-          \u{1F3A4} <b>Microphone access denied.</b> Allow microphone in your browser\u2019s site settings and reload.
+          🎤 Microphone access denied — allow mic in browser settings and reload.
         </div>`;
       }
     }
@@ -1253,9 +1273,10 @@ class SimsonCard extends HTMLElement {
       const nodeTargets = this._getNodeTargets();
       const nonNodeTargets = this._getNonNodeTargets();
 
-      // Build known nodes
+      // Build known nodes (fetched from service + YAML config)
       const knownNodes = new Set();
       nodeTargets.forEach(t => knownNodes.add(t.node_id || t.id));
+      (this._config.target_nodes || []).forEach(n => knownNodes.add(n));
 
       // Node input
       dialHtml = `
@@ -1337,18 +1358,22 @@ class SimsonCard extends HTMLElement {
         }
       }
 
-      // Node targets as quick-dial
-      if (nodeTargets.length > 0) {
+      // Node targets as quick-dial — merge fetched nodes + YAML config target_nodes
+      const configOnlyNodes = (this._config.target_nodes || [])
+        .filter(n => !nodeTargets.some(t => (t.node_id || t.id) === n))
+        .map(n => ({ id: n, node_id: n, label: n, type: "node", icon: "\u{1F3E0}" }));
+      const allNodeTargets = [...nodeTargets, ...configOnlyNodes];
+      if (allNodeTargets.length > 0) {
         dialHtml += `
           <div class="target-section">
             <div class="section-label">\u{1F3E0} Nodes</div>
             <div class="target-grid">
-              ${nodeTargets.map(t => `
+              ${allNodeTargets.map(t => `
                 <button class="btn-target type-node"
                   data-tid="${this._esc(t.id)}" data-ttype="node"
                   data-tnodeid="${this._esc(t.node_id || t.id)}"
                   ${!connected ? "disabled" : ""}>
-                  <span class="target-icon">${this._esc(t.icon) || "\u{1F3E0}"}</span>
+                  <span class="target-icon">${t.icon || "\u{1F3E0}"}</span>
                   <span class="target-label">${this._esc(t.label || t.id)}</span>
                 </button>
               `).join("")}
