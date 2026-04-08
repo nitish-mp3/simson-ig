@@ -52,7 +52,8 @@ class SimsonApiClient:
     async def make_call(self, target_node_id: str = "", call_type: str = "voice",
                         target_id: str = "",
                         target_user_id: str = "",
-                        target_user_name: str = "") -> dict:
+                        target_user_name: str = "",
+                        caller_user_id: str = "") -> dict:
         data = {"call_type": call_type}
         if target_id:
             data["target_id"] = target_id
@@ -62,6 +63,8 @@ class SimsonApiClient:
             data["target_user_id"] = target_user_id
         if target_user_name:
             data["target_user_name"] = target_user_name
+        if caller_user_id:
+            data["caller_user_id"] = caller_user_id
         return await self._post("/api/call", data)
 
     async def answer_call(self, call_id: str) -> dict:

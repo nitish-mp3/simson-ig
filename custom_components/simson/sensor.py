@@ -115,6 +115,8 @@ class SimsonCallStateSensor(SimsonBaseSensor):
                 "remote_label": active.get("remote_label", ""),
                 "call_type": active.get("call_type", ""),
                 "started_at": active.get("started_at", ""),
+                "target_user_id": active.get("target_user_id", ""),
+                "caller_user_id": active.get("caller_user_id", ""),
             }
         return {}
 

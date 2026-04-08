@@ -17,7 +17,7 @@
  *     - node_id: office2
  */
 
-const VERSION = "4.2.0";
+const VERSION = "4.3.0";
 
 const ICE_SERVERS = [
   { urls: "stun:stun.l.google.com:19302" },
@@ -562,7 +562,13 @@ class SimsonCard extends HTMLElement {
   }
 
   _onHACallStatus(event) {
-    const { call_id, status, direction, remote_node_id } = event;
+    const { call_id, status, direction, remote_node_id, target_user_id, caller_user_id } = event;
+    // Only react to events that belong to this session's user.
+    const myUserId = this._hass?.user?.id || "";
+    const isMyEvent = call_id === this._currentCallId ||
+      (direction === "incoming" && (!target_user_id || target_user_id === myUserId)) ||
+      (direction === "outgoing" && (!caller_user_id || caller_user_id === myUserId));
+    if (!isMyEvent) return;
     if (status === "active") {
       this._currentCallId = call_id;
       this._currentRemoteNode = remote_node_id;
@@ -666,7 +672,7 @@ class SimsonCard extends HTMLElement {
     if (!nodeId) return;
     this._currentRemoteNode = nodeId;
     this._callStart = null;
-    const data = { target_node_id: nodeId, call_type: "voice" };
+    const data = { target_node_id: nodeId, call_type: "voice", caller_user_id: this._hass?.user?.id || "" };
     if (targetUserId) {
       data.target_user_id = targetUserId;
       data.target_user_name = targetUserName || "";
@@ -680,6 +686,7 @@ class SimsonCard extends HTMLElement {
     this._callService("make_call", {
       target_id: targetId,
       call_type: targetType === "asterisk" ? "sip" : "voice",
+      caller_user_id: this._hass?.user?.id || "",
     });
   }
 
@@ -1109,7 +1116,7 @@ class SimsonCard extends HTMLElement {
 
     popup.querySelector("[data-action='all']")?.addEventListener("click", () => {
       this._removeUserPicker();
-      const data = { target_node_id: nodeId, call_type: "voice" };
+      const data = { target_node_id: nodeId, call_type: "voice", caller_user_id: this._hass?.user?.id || "" };
       if (this._userPickerTargetId) data.target_id = this._userPickerTargetId;
       this._currentRemoteNode = nodeId;
       this._callStart = null;
@@ -1123,6 +1130,7 @@ class SimsonCard extends HTMLElement {
         const data = {
           target_node_id: nodeId, call_type: "voice",
           target_user_id: btn.dataset.uid, target_user_name: btn.dataset.uname,
+          caller_user_id: this._hass?.user?.id || "",
         };
         if (this._userPickerTargetId) data.target_id = this._userPickerTargetId;
         this._callService("make_call", data);
@@ -1195,32 +1203,43 @@ class SimsonCard extends HTMLElement {
 
     const connected = this._isConnected();
     const callState = this._callState();
-    const isIdle = callState === "idle" || callState === "unknown";
-    const isIncoming = callState === "incoming";
-    const isRinging = callState === "requesting" || callState === "ringing";
-    const isActive = callState === "active";
-    const isMissed = callState === "missed";
-    const isDeclined = callState === "declined";
-    const isTimeout = callState === "timeout";
+    const callId = this._activeCallAttr("call_id", "") || this._currentCallId || "";
+    const direction = this._activeCallAttr("direction", "");
+
+    // Per-user call ownership: only show call UI to the intended caller or target.
+    const myUserId = this._hass?.user?.id || "";
+    const targetUserId = this._activeCallAttr("target_user_id", "");
+    const callerUserId = this._activeCallAttr("caller_user_id", "");
+    const isMyCall = !callId ||
+      callId === this._currentCallId ||
+      (callState === "incoming" && (!targetUserId || targetUserId === myUserId)) ||
+      (callState !== "incoming" && (!callerUserId || callerUserId === myUserId));
+    const effectiveCallState = isMyCall ? callState : "idle";
+
+    const isIdle = effectiveCallState === "idle" || effectiveCallState === "unknown";
+    const isIncoming = effectiveCallState === "incoming";
+    const isRinging = effectiveCallState === "requesting" || effectiveCallState === "ringing";
+    const isActive = effectiveCallState === "active";
+    const isMissed = effectiveCallState === "missed";
+    const isDeclined = effectiveCallState === "declined";
+    const isTimeout = effectiveCallState === "timeout";
     const hasCall = !isIdle && !isMissed && !isDeclined && !isTimeout;
     const hasWebRTC = !!this._pc;
 
     const remoteLabel = this._activeCallAttr("remote_label") ||
                         this._activeCallAttr("remote_node_id") ||
                         this._currentRemoteNode || "Unknown";
-    const callId = this._activeCallAttr("call_id", "") || this._currentCallId || "";
-    const direction = this._activeCallAttr("direction", "");
 
-    if (callId && !this._currentCallId) this._currentCallId = callId;
+    if (callId && !this._currentCallId && isMyCall) this._currentCallId = callId;
     if (hasCall && !this._currentRemoteNode) {
       this._currentRemoteNode = this._activeCallAttr("remote_node_id", "");
     }
 
-    // State transitions
+    // State transitions (only fire side-effects for our own calls)
     const prev = this._prevCallState;
-    if (prev !== callState) {
-      this._prevCallState = callState;
-      if (callState === "incoming" && prev === "idle") {
+    if (prev !== effectiveCallState) {
+      this._prevCallState = effectiveCallState;
+      if (effectiveCallState === "incoming" && prev === "idle") {
         if (!(this._ignoredCallId && this._ignoredCallId === callId)) {
           this._currentCallId = callId;
           this._currentRemoteNode = this._activeCallAttr("remote_node_id", "");
@@ -1231,14 +1250,14 @@ class SimsonCard extends HTMLElement {
           this._showIncomingPopup();
           this._showBrowserNotification(this._incomingFrom, this._incomingCallType);
         }
-      } else if (callState === "active" && prev !== "active") {
+      } else if (effectiveCallState === "active" && prev !== "active") {
         this._stopRingtone(); this._removePopup(); this._dismissBrowserNotification();
         this._currentCallId = callId;
         this._currentRemoteNode = this._activeCallAttr("remote_node_id", "");
         this._polite = (nodeId || "") < (this._currentRemoteNode || "");
         if (!this._callStart) this._callStart = Date.now();
         this._startWebRTC();
-      } else if (callState === "idle" && prev !== "idle") {
+      } else if (effectiveCallState === "idle" && prev !== "idle") {
         this._stopRingtone(); this._removePopup(); this._dismissBrowserNotification();
         this._cleanupWebRTC();
         this._callStart = null; this._currentCallId = null;
@@ -1247,7 +1266,7 @@ class SimsonCard extends HTMLElement {
       }
     }
 
-    if (isRinging && !this._currentCallId && callId) {
+    if (isRinging && isMyCall && !this._currentCallId && callId) {
       this._currentCallId = callId;
       this._currentRemoteNode = this._activeCallAttr("remote_node_id", "");
     }

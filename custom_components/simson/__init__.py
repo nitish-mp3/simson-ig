@@ -136,6 +136,7 @@ def _register_services(hass: HomeAssistant, client: SimsonApiClient) -> None:
         call_type = call.data.get("call_type", "voice")
         target_user_id = call.data.get("target_user_id", "")
         target_user_name = call.data.get("target_user_name", "")
+        caller_user_id = call.data.get("caller_user_id", "")
         try:
             result = await client.make_call(
                 target_node_id=target,
@@ -143,6 +144,7 @@ def _register_services(hass: HomeAssistant, client: SimsonApiClient) -> None:
                 target_id=target_id,
                 target_user_id=target_user_id,
                 target_user_name=target_user_name,
+                caller_user_id=caller_user_id,
             )
             logger.info("Call initiated: %s", result)
         except Exception as err:
@@ -181,6 +183,7 @@ def _register_services(hass: HomeAssistant, client: SimsonApiClient) -> None:
                 vol.Optional("call_type", default="voice"): str,
                 vol.Optional("target_user_id", default=""): str,
                 vol.Optional("target_user_name", default=""): str,
+                vol.Optional("caller_user_id", default=""): str,
             }),
         )
         hass.services.async_register(
