@@ -1,7 +1,8 @@
 /**
- * Simson Call Relay — Lovelace Card v4.1.0
+ * Simson Call Relay — Lovelace Card v4.2.0
  *
  * Full WebRTC voice calling between HA instances.
+ * v4.2.0: Multi-user instant VPS push, user-list refresh button, SIP manual dial + device rows.
  * v4.1.0: YAML target_nodes compat, HTTP mic graceful fallback, Asterisk/SIP discovery.
  * v4.0.0: Auto-detect node, inline dropdowns, call history, professional UI.
  *
@@ -16,7 +17,7 @@
  *     - node_id: office2
  */
 
-const VERSION = "4.1.0";
+const VERSION = "4.2.0";
 
 const ICE_SERVERS = [
   { urls: "stun:stun.l.google.com:19302" },
@@ -276,6 +277,55 @@ const STYLES = `
   }
   .history-empty-icon { font-size: 36px; margin-bottom: 8px; opacity: .5; }
   .history-empty-text { font-size: 13px; }
+
+  /* ── User section header with refresh button ── */
+  .section-header {
+    display: flex; align-items: center; justify-content: space-between;
+    margin-bottom: 8px;
+  }
+  .section-header .section-label { margin-bottom: 0; }
+  .btn-refresh {
+    background: none; border: none; color: #555; cursor: pointer;
+    font-size: 16px; padding: 2px 6px; border-radius: 6px;
+    line-height: 1; transition: color .15s, background .15s;
+  }
+  .btn-refresh:hover { color: #03a9f4; background: #03a9f415; }
+
+  /* ── SIP / Asterisk enhanced UI ── */
+  .sip-dial-row {
+    display: flex; gap: 6px; margin-bottom: 10px;
+  }
+  .sip-ext-input {
+    flex: 1; background: #ffffff08; border: 1px solid #e6510030;
+    border-radius: 10px; padding: 10px 14px; font-size: 14px; color: #ffcc80;
+    outline: none; min-width: 0;
+  }
+  .sip-ext-input:focus { border-color: #e6510066; background: #e6510008; }
+  .sip-ext-input::placeholder { color: #555; }
+  .sip-ext-btn {
+    background: #e65100; color: #fff; border: none; border-radius: 10px;
+    padding: 10px 16px; font-size: 13px; font-weight: 700; cursor: pointer;
+    white-space: nowrap; transition: background .15s;
+  }
+  .sip-ext-btn:hover { background: #f4511e; }
+  .sip-ext-btn:disabled { opacity: .4; cursor: not-allowed; }
+  .sip-device {
+    display: flex; align-items: center; gap: 10px; padding: 10px 14px;
+    background: #e6510008; border: 1px solid #e6510020; border-radius: 10px;
+    margin-bottom: 6px; cursor: pointer; transition: background .15s, border-color .15s;
+  }
+  .sip-device:hover { background: #e6510018; border-color: #e6510055; }
+  .sip-device:active { transform: scale(.98); }
+  .sip-device.disabled { opacity: .4; pointer-events: none; }
+  .sip-device .sip-icon {
+    width: 34px; height: 34px; border-radius: 50%; background: #e6510018;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 16px; flex-shrink: 0;
+  }
+  .sip-device .sip-info { flex: 1; }
+  .sip-device .sip-label { font-size: 14px; font-weight: 600; color: #ffcc80; }
+  .sip-device .sip-ext { font-size: 11px; color: #888; }
+  .sip-device .sip-arrow { font-size: 14px; opacity: .35; }
 `;
 
 // ── Card class ────────────────────────────────────────────────────────
@@ -686,9 +736,9 @@ class SimsonCard extends HTMLElement {
 
   _fetchRemoteUsers(nodeId) {
     if (!nodeId || !this._hass) return;
-    // Use cache if fresh (< 10s).
+    // Use cache if fresh (< 3s).
     const cached = this._usersCache[nodeId];
-    if (cached && (Date.now() - cached.timestamp) < 10000) {
+    if (cached && (Date.now() - cached.timestamp) < 3000) {
       this._remoteUsers = cached.users;
       this._usersLoading = false;
       this._render();
@@ -1304,7 +1354,10 @@ class SimsonCard extends HTMLElement {
             : (this._usersCache[this._selectedNode]?.users || []);
 
           dialHtml += `
-            <div class="section-label">Users on ${this._esc(this._selectedNode)}</div>
+            <div class="section-header">
+              <div class="section-label">Users on ${this._esc(this._selectedNode)}</div>
+              <button class="btn-refresh" id="btn-refresh-users" title="Refresh user list">&#x21BB;</button>
+            </div>
             <div class="user-list">
               <div class="user-item all-users" data-action="call-all">
                 <div class="user-avatar">\u{1F4DE}</div>
@@ -1341,23 +1394,52 @@ class SimsonCard extends HTMLElement {
         const labels = { device: "Devices", asterisk: "Asterisk / SIP", queue: "Queues" };
         for (const type of ["asterisk", "device", "queue"]) {
           const targets = nonNodeTargets.filter(t => t.type === type);
-          if (targets.length === 0) continue;
-          dialHtml += `
-            <div class="target-section">
-              <div class="section-label">${icons[type] || ""} ${labels[type] || type}</div>
-              <div class="target-grid">
+          if (type !== "asterisk" && targets.length === 0) continue;
+
+          if (type === "asterisk") {
+            // Enhanced SIP section: manual dial input + list-style device rows
+            dialHtml += `
+              <div class="target-section">
+                <div class="section-label">\u{1F4DE} Asterisk / SIP</div>
+                <div class="sip-dial-row">
+                  <input id="sip-ext-input" class="sip-ext-input" type="text"
+                    inputmode="numeric" placeholder="Dial extension\u2026 e.g. 101"
+                    ${!connected ? "disabled" : ""} />
+                  <button class="sip-ext-btn" id="sip-ext-call" ${!connected ? "disabled" : ""}>Call</button>
+                </div>
                 ${targets.map(t => `
-                  <button class="btn-target type-${this._esc(type)}"
-                    data-tid="${this._esc(t.id)}" data-ttype="${this._esc(type)}"
-                    data-tnodeid="${this._esc(t.node_id || t.id)}"
-                    ${!connected ? "disabled" : ""}>
-                    <span class="target-icon">${t.icon || icons[type]}</span>
-                    <span class="target-label">${this._esc(t.label || t.id)}</span>
-                  </button>
+                  <div class="sip-device${!connected ? " disabled" : ""}"
+                    data-tid="${this._esc(t.id)}" data-ttype="asterisk"
+                    data-tnodeid="${this._esc(t.node_id || t.id)}">
+                    <div class="sip-icon">${t.icon || "\u{1F4DE}"}</div>
+                    <div class="sip-info">
+                      <div class="sip-label">${this._esc(t.label || t.id)}</div>
+                      <div class="sip-ext">Ext.\u00A0${this._esc(t.extension || t.label || t.id)}\u00A0\u00B7\u00A0IP Phone / SIP Device</div>
+                    </div>
+                    <div class="sip-arrow">\u2192</div>
+                  </div>
                 `).join("")}
               </div>
-            </div>
-          `;
+            `;
+          } else {
+            if (targets.length === 0) continue;
+            dialHtml += `
+              <div class="target-section">
+                <div class="section-label">${icons[type] || ""} ${labels[type] || type}</div>
+                <div class="target-grid">
+                  ${targets.map(t => `
+                    <button class="btn-target type-${this._esc(type)}"
+                      data-tid="${this._esc(t.id)}" data-ttype="${this._esc(type)}"
+                      data-tnodeid="${this._esc(t.node_id || t.id)}"
+                      ${!connected ? "disabled" : ""}>
+                      <span class="target-icon">${t.icon || icons[type]}</span>
+                      <span class="target-label">${this._esc(t.label || t.id)}</span>
+                    </button>
+                  `).join("")}
+                </div>
+              </div>
+            `;
+          }
         }
       }
 
@@ -1505,7 +1587,34 @@ class SimsonCard extends HTMLElement {
       });
     });
 
-    // Target buttons
+    // Refresh users button
+    root.querySelector("#btn-refresh-users")?.addEventListener("click", () => {
+      if (this._selectedNode) {
+        this._usersCache[this._selectedNode] = null;
+        this._usersLoading = true;
+        this._render();
+        this._fetchRemoteUsers(this._selectedNode);
+      }
+    });
+
+    // SIP: manual extension input + call button
+    const sipInput = root.querySelector("#sip-ext-input");
+    const sipCallBtn = root.querySelector("#sip-ext-call");
+    const doSipDial = () => {
+      const ext = sipInput?.value?.trim();
+      if (ext) this._dialTarget(`asterisk_${ext}`, "asterisk", ext);
+    };
+    sipCallBtn?.addEventListener("click", doSipDial);
+    sipInput?.addEventListener("keydown", e => { if (e.key === "Enter") doSipDial(); });
+
+    // SIP: device row clicks
+    root.querySelectorAll(".sip-device:not(.disabled)").forEach(el => {
+      el.addEventListener("click", () => {
+        this._dialTarget(el.dataset.tid, "asterisk", el.dataset.tnodeid || el.dataset.tid);
+      });
+    });
+
+    // Target buttons (device, queue, node)
     root.querySelectorAll(".btn-target").forEach(btn => {
       btn.addEventListener("click", () => {
         const tid = btn.dataset.tid;
@@ -1616,16 +1725,16 @@ class SimsonCard extends HTMLElement {
   getCardSize() { return 4; }
 }
 
-// Primary registration — simson-card so existing YAML and resource URLs need no changes.
-customElements.define("simson-card", SimsonCard);
+// Primary registration — new unique name avoids conflict with any old manually-added card.
+customElements.define("simson-relay-card", SimsonCard);
 
-// Alias for new name (used by integration auto-loader).
-try { customElements.define("simson-relay-card", class extends SimsonCard {}); } catch (e) {}
+// Silent back-compat aliases — if user had old card already defined, these are skipped.
+try { customElements.define("simson-card", class extends SimsonCard {}); } catch (e) {}
 try { customElements.define("simson-call-card", class extends SimsonCard {}); } catch (e) {}
 
 window.customCards = window.customCards || [];
 window.customCards.push({
-  type: "simson-card",
+  type: "simson-relay-card",
   name: "Simson Call Relay",
   description: "Voice calling between Home Assistant instances — WebRTC, history, Asterisk/SIP",
   preview: false,

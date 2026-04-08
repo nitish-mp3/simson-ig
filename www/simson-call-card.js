@@ -1616,16 +1616,16 @@ class SimsonCard extends HTMLElement {
   getCardSize() { return 4; }
 }
 
-// Primary registration — simson-card so existing YAML and resource URLs need no changes.
-customElements.define("simson-card", SimsonCard);
+// Primary registration — new unique name avoids conflict with any old manually-added card.
+customElements.define("simson-relay-card", SimsonCard);
 
-// Alias for new name (used by integration auto-loader).
-try { customElements.define("simson-relay-card", class extends SimsonCard {}); } catch (e) {}
+// Silent back-compat aliases — if user had old card already defined, these are skipped.
+try { customElements.define("simson-card", class extends SimsonCard {}); } catch (e) {}
 try { customElements.define("simson-call-card", class extends SimsonCard {}); } catch (e) {}
 
 window.customCards = window.customCards || [];
 window.customCards.push({
-  type: "simson-card",
+  type: "simson-relay-card",
   name: "Simson Call Relay",
   description: "Voice calling between Home Assistant instances — WebRTC, history, Asterisk/SIP",
   preview: false,
