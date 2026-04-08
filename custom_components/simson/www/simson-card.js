@@ -17,7 +17,7 @@
  *     - node_id: office2
  */
 
-const VERSION = "4.3.0";
+const VERSION = "4.3.1";
 
 const ICE_SERVERS = [
   { urls: "stun:stun.l.google.com:19302" },
@@ -1207,13 +1207,15 @@ class SimsonCard extends HTMLElement {
     const direction = this._activeCallAttr("direction", "");
 
     // Per-user call ownership: only show call UI to the intended caller or target.
+    // Use `direction` (from entity attr — stable across all call states) not `callState`.
     const myUserId = this._hass?.user?.id || "";
     const targetUserId = this._activeCallAttr("target_user_id", "");
     const callerUserId = this._activeCallAttr("caller_user_id", "");
     const isMyCall = !callId ||
       callId === this._currentCallId ||
-      (callState === "incoming" && (!targetUserId || targetUserId === myUserId)) ||
-      (callState !== "incoming" && (!callerUserId || callerUserId === myUserId));
+      !direction ||
+      (direction === "incoming" && (!targetUserId || targetUserId === myUserId)) ||
+      (direction === "outgoing" && (!callerUserId || callerUserId === myUserId));
     const effectiveCallState = isMyCall ? callState : "idle";
 
     const isIdle = effectiveCallState === "idle" || effectiveCallState === "unknown";
