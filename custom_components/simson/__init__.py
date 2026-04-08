@@ -9,8 +9,8 @@ from pathlib import Path
 import voluptuous as vol
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import Platform
-from homeassistant.core import HomeAssistant, ServiceCall
+from homeassistant.const import EVENT_HOMEASSISTANT_STARTED, Platform
+from homeassistant.core import CoreState, HomeAssistant, ServiceCall
 from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.components.http import StaticPathConfig
@@ -34,7 +34,8 @@ from .const import (
 logger = logging.getLogger(__name__)
 
 SCAN_INTERVAL = timedelta(seconds=5)
-_CARD_URL = "/simson/www/simson-card.js"
+_CARD_JS_PATH = "/simson/www/simson-card.js"
+_CARD_URL = f"{_CARD_JS_PATH}?v=4.1.0"  # bump this whenever the card JS changes
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -48,16 +49,20 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         except Exception as err:
             raise ConfigEntryNotReady(f"Cannot connect to Simson addon: {err}") from err
 
-        # Serve the Lovelace card JS.
-        # After setup, add it once in HA: Settings → Dashboards → ⋮ → Resources
-        #   URL: /simson/www/simson-card.js   Type: JavaScript module
-        await hass.http.async_register_static_paths([
-            StaticPathConfig(
-                "/simson/www",
-                str(Path(__file__).parent / "www"),
-                cache_headers=False,
-            )
-        ])
+        # Serve the Lovelace card JS via a static path.
+        try:
+            await hass.http.async_register_static_paths([
+                StaticPathConfig(
+                    "/simson/www",
+                    str(Path(__file__).parent / "www"),
+                    cache_headers=False,
+                )
+            ])
+        except Exception:
+            pass  # Path already registered on reload — safe to ignore
+
+        # Auto-register (or version-update) the Lovelace resource — no manual step needed.
+        hass.async_create_task(_async_ensure_lovelace_resource(hass))
 
         coordinator = SimsonCoordinator(hass, client)
         await coordinator.async_config_entry_first_refresh()
@@ -98,6 +103,49 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                         SERVICE_GET_CALL_HISTORY):
                 hass.services.async_remove(DOMAIN, svc)
     return unload_ok
+
+
+async def _async_ensure_lovelace_resource(hass: HomeAssistant) -> None:
+    """Auto-register or version-bump the Simson card as a Lovelace resource.
+
+    Runs once after HA has fully started so lovelace data is guaranteed to be
+    initialised. Handles three cases:
+      1. Not registered at all  → creates it.
+      2. Registered with old version query-param → updates URL in-place.
+      3. Already up-to-date → no-op.
+    YAML-mode lovelace has no ResourceStorageCollection; we skip silently.
+    """
+    async def _do() -> None:
+        try:
+            lovelace_data = hass.data.get("lovelace")
+            if not lovelace_data:
+                return
+            resources = lovelace_data.get("resources")
+            if not resources:
+                return  # YAML mode — user manages resources manually
+            await resources.async_load()
+            for rid, rdata in list(resources.data.items()):
+                rurl = rdata.get("url", "")
+                if rurl == _CARD_URL:
+                    return  # Already correct version, nothing to do
+                if _CARD_JS_PATH in rurl:
+                    # Old version (different ?v= param) — update in-place
+                    await resources.async_update_item(rid, {"res_type": "module", "url": _CARD_URL})
+                    logger.info("Simson: Lovelace card resource updated → %s", _CARD_URL)
+                    return
+            # New install — register from scratch
+            await resources.async_create_item({"res_type": "module", "url": _CARD_URL})
+            logger.info("Simson: Lovelace card resource registered: %s", _CARD_URL)
+        except Exception as err:
+            logger.warning("Simson: Could not auto-register Lovelace resource: %s", err)
+
+    if hass.state == CoreState.running:
+        await _do()
+    else:
+        hass.bus.async_listen_once(
+            EVENT_HOMEASSISTANT_STARTED,
+            lambda _event: hass.async_create_task(_do()),
+        )
 
 
 class SimsonCoordinator(DataUpdateCoordinator):

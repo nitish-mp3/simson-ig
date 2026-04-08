@@ -5,8 +5,11 @@
  * v4.1.0: YAML target_nodes compat, HTTP mic graceful fallback, Asterisk/SIP discovery.
  * v4.0.0: Auto-detect node, inline dropdowns, call history, professional UI.
  *
+ * Primary element: custom:simson-relay-card  ← use this in your dashboards
+ * Aliases kept for back-compat: simson-card, simson-call-card
+ *
  * Config (all optional):
- *   type: custom:simson-card
+ *   type: custom:simson-relay-card
  *   title: Simson              # optional
  *   node_id: living_room       # auto-detected if omitted
  *   target_nodes:              # pre-populated quick-dial nodes
@@ -1608,28 +1611,23 @@ class SimsonCard extends HTMLElement {
 
   static getConfigElement() { return document.createElement("div"); }
   static getStubConfig() {
-    return { title: "Simson" };
+    return { type: "custom:simson-relay-card", title: "Simson" };
   }
   getCardSize() { return 4; }
 }
 
-customElements.define("simson-card", SimsonCard);
+// Primary registration — new unique name avoids conflict with any old manually-added card.
+customElements.define("simson-relay-card", SimsonCard);
 
-try {
-  customElements.define("simson-call-card", class extends SimsonCard {});
-} catch (e) { /* already defined */ }
+// Silent back-compat aliases — if user had old card already defined, these are skipped.
+try { customElements.define("simson-card", class extends SimsonCard {}); } catch (e) {}
+try { customElements.define("simson-call-card", class extends SimsonCard {}); } catch (e) {}
 
 window.customCards = window.customCards || [];
 window.customCards.push({
-  type: "simson-card",
+  type: "simson-relay-card",
   name: "Simson Call Relay",
-  description: "Voice calling between Home Assistant instances with WebRTC audio",
-  preview: false,
-});
-window.customCards.push({
-  type: "simson-call-card",
-  name: "Simson Call Relay (compat)",
-  description: "Alias for simson-card",
+  description: "Voice calling between Home Assistant instances — WebRTC, history, Asterisk/SIP",
   preview: false,
 });
 
