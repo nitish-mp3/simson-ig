@@ -1,24 +1,27 @@
 /**
- * Simson Call Relay — Lovelace Card v4.2.0
+ * Simson Call Relay — Lovelace Card v4.4.0
  *
- * Full WebRTC voice calling between HA instances.
- * v4.2.0: Multi-user instant VPS push, user-list refresh button, SIP manual dial + device rows.
- * v4.1.0: YAML target_nodes compat, HTTP mic graceful fallback, Asterisk/SIP discovery.
- * v4.0.0: Auto-detect node, inline dropdowns, call history, professional UI.
+ * Full WebRTC voice calling between HA instances + Asterisk SIP phone support.
+ * v4.4.0: TURN server support (fixes audio on HTTPS/symmetric NAT), inline MinimalSIPUA
+ *         for joining Asterisk ConfBridges, dynamic ICE from /api/webrtc-config,
+ *         real RTCStats quality + connection-type badge (relay/reflexive/host).
+ * v4.3.1: multi-user push, SIP manual dial, device rows.
+ * v4.2.0: YAML compat, HTTP mic fallback, Asterisk discovery.
  *
- * Primary element: custom:simson-relay-card  ← use this in your dashboards
- * Aliases kept for back-compat: simson-card, simson-call-card
+ * Primary element: custom:simson-relay-card
+ * Aliases: simson-card, simson-call-card
  *
  * Config (all optional):
  *   type: custom:simson-relay-card
- *   title: Simson              # optional
- *   node_id: living_room       # auto-detected if omitted
- *   target_nodes:              # pre-populated quick-dial nodes
+ *   title: Simson
+ *   node_id: living_room
+ *   target_nodes:
  *     - node_id: office2
  */
 
-const VERSION = "4.3.1";
+const VERSION = "4.4.0";
 
+// Default ICE servers (fallback when /api/webrtc-config is unavailable).
 const ICE_SERVERS = [
   { urls: "stun:stun.l.google.com:19302" },
   { urls: "stun:stun1.l.google.com:19302" },
@@ -208,6 +211,11 @@ const STYLES = `
   .quality-bar .bar.fair { background: #ff9800; }
   .quality-bar .bar.weak { background: #f44336; }
   .quality-bar .bar.off { background: #333; }
+  /* Connection type badge */
+  .conn-badge { font-size: 10px; padding: 1px 6px; border-radius: 8px; margin-right: 4px; display: inline-block; vertical-align: middle; }
+  .conn-badge.relay  { background: rgba(255,152,0,.18); color: #ff9800; }
+  .conn-badge.srflx  { background: rgba(33,150,243,.18); color: #2196f3; }
+  .conn-badge.host   { background: rgba(76,175,80,.18);  color: #4caf50; }
 
   /* Divider */
   .divider { height: 1px; background: #ffffff0a; margin: 16px 0; }
@@ -328,6 +336,369 @@ const STYLES = `
   .sip-device .sip-arrow { font-size: 14px; opacity: .35; }
 `;
 
+// ── MinimalSIPUA ─────────────────────────────────────────────────────────────
+//
+// A lightweight SIP-over-WebSocket client for connecting to Asterisk PJSIP.
+// Handles REGISTER (with MD5 Digest auth), outgoing INVITE to a ConfBridge
+// extension, and graceful BYE / hangup.  Relies on RTCPeerConnection for media.
+//
+// Used when call_type === "sip" so the browser can join an Asterisk ConfBridge
+// alongside a SIP desk phone — without shipping the full SIP.js library.
+// ─────────────────────────────────────────────────────────────────────────────
+
+class MinimalSIPUA {
+  constructor({ uri, password, wsUrl, iceServers, onAudioTrack, onRegistered, onError, onBye }) {
+    this._uri = uri;            // "sip:webrtc-pool@simson-vps.niti.life"
+    this._password = password;
+    this._wsUrl = wsUrl;        // "wss://simson-vps.niti.life/sip/ws"
+    this._iceServers = iceServers || [];
+    this._onAudioTrack = onAudioTrack;
+    this._onRegistered = onRegistered;
+    this._onError = onError;
+    this._onBye = onBye;
+    this._ws = null;
+    this._pc = null;
+    this._localStream = null;
+    this._cseq = 1;
+    this._tag = this._rand(10);
+    this._regCallId = this._rand(16) + "@" + this._domain();
+    this._callId = null;
+    this._registered = false;
+    this._activeCallFrom = null;
+    this._activeCallVia = null;
+    this._activeCallCseq = null;
+    this._activeCallToTag = null;
+  }
+
+  // ── Public API ────────────────────────────────────────────────
+
+  connect() {
+    try {
+      this._ws = new WebSocket(this._wsUrl, "sip");
+    } catch (e) {
+      this._onError && this._onError(new Error("SIP WS connection failed: " + e.message));
+      return;
+    }
+    this._ws.onopen  = () => this._register();
+    this._ws.onmessage = (e) => this._handleRaw(e.data);
+    this._ws.onerror = () => this._onError && this._onError(new Error("SIP WebSocket error"));
+    this._ws.onclose = () => { this._registered = false; };
+  }
+
+  disconnect() {
+    if (this._registered) this._sendUnregister();
+    setTimeout(() => { this._ws && this._ws.close(); }, 400);
+    this._cleanup();
+  }
+
+  // Dial a ConfBridge extension (e.g. "bridge-AbC123").
+  async dial(extension) {
+    if (!this._registered) {
+      this._onError && this._onError(new Error("SIP not registered"));
+      return;
+    }
+    try {
+      this._localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+    } catch (e) {
+      this._onError && this._onError(e);
+      return;
+    }
+    this._pc = new RTCPeerConnection({ iceServers: this._iceServers });
+    this._pc.ontrack = (ev) => this._onAudioTrack && this._onAudioTrack(ev.streams?.[0] || null, ev.track);
+    for (const t of this._localStream.getAudioTracks()) this._pc.addTrack(t, this._localStream);
+
+    const offer = await this._pc.createOffer();
+    await this._pc.setLocalDescription(offer);
+    await this._waitICE();
+
+    this._callId = this._rand(16) + "@" + this._domain();
+    const target = "sip:" + extension + "@" + this._domain();
+    this._send(this._buildRequest("INVITE", target, this._callId, this._cseq++, "",
+      this._pc.localDescription.sdp));
+  }
+
+  hangup() {
+    if (!this._callId) return;
+    // BYE to the contact we got from 200 OK (or use To fallback)
+    const to = "sip:" + this._domain();
+    this._send(this._buildRequest("BYE", to, this._callId, this._cseq++));
+    this._cleanup();
+    this._callId = null;
+  }
+
+  get registered() { return this._registered; }
+
+  // ── SIP message construction ──────────────────────────────────
+
+  _rand(n = 8) { return Math.random().toString(36).slice(2, 2 + n); }
+  _domain()    { return this._uri.split("@")[1]; }
+  _user()      { return this._uri.split(":")[1]?.split("@")[0] || ""; }
+
+  _buildRequest(method, targetUri, callId, cseq, extraHeaders = "", body = "") {
+    const via    = `SIP/2.0/WSS ${this._domain()};branch=z9hG4bK${this._rand()};rport`;
+    const from   = `<${this._uri}>;tag=${this._tag}`;
+    const to     = `<${targetUri}>`;
+    const ctLen  = body ? `Content-Type: application/sdp\r\nContent-Length: ${body.length}` : "Content-Length: 0";
+    return `${method} ${targetUri} SIP/2.0\r\n` +
+      `Via: ${via}\r\n` +
+      `Max-Forwards: 70\r\n` +
+      `From: ${from}\r\n` +
+      `To: ${to}\r\n` +
+      `Call-ID: ${callId}\r\n` +
+      `CSeq: ${cseq} ${method}\r\n` +
+      `Contact: <${this._uri};transport=ws>\r\n` +
+      `User-Agent: Simson/${VERSION}\r\n` +
+      (extraHeaders ? extraHeaders + "\r\n" : "") +
+      `${ctLen}\r\n\r\n${body}`;
+  }
+
+  _buildResponse(code, phrase, from, to, callId, via, cseq, body = "") {
+    const ctLen = body ? `Content-Type: application/sdp\r\nContent-Length: ${body.length}` : "Content-Length: 0";
+    return `SIP/2.0 ${code} ${phrase}\r\n` +
+      `Via: ${via}\r\n` +
+      `From: ${from}\r\n` +
+      `To: ${to}\r\n` +
+      `Call-ID: ${callId}\r\n` +
+      `CSeq: ${cseq}\r\n` +
+      `Contact: <${this._uri};transport=ws>\r\n` +
+      `${ctLen}\r\n\r\n${body}`;
+  }
+
+  _send(msg) {
+    if (this._ws && this._ws.readyState === WebSocket.OPEN) this._ws.send(msg);
+  }
+
+  // ── REGISTER ──────────────────────────────────────────────────
+
+  _register() {
+    this._send(this._buildRequest("REGISTER", "sip:" + this._domain(),
+      this._regCallId, this._cseq++, "Expires: 3600\r\n"));
+  }
+
+  _sendUnregister() {
+    this._send(this._buildRequest("REGISTER", "sip:" + this._domain(),
+      this._regCallId, this._cseq++, "Expires: 0\r\n"));
+  }
+
+  // ── Message parsing ───────────────────────────────────────────
+
+  _hdr(raw, name) {
+    const lo = name.toLowerCase();
+    const line = raw.split("\r\n").find(l => l.toLowerCase().startsWith(lo + ":"));
+    return line ? line.slice(name.length + 1).trim() : null;
+  }
+
+  _body(raw) {
+    const idx = raw.indexOf("\r\n\r\n");
+    return idx >= 0 ? raw.slice(idx + 4) : "";
+  }
+
+  _handleRaw(data) {
+    try {
+      const first = data.split("\r\n")[0];
+      if (first.startsWith("SIP/2.0")) {
+        const code = parseInt(first.split(" ")[1]);
+        const cseqHdr = this._hdr(data, "CSeq") || "";
+        const method = cseqHdr.split(" ")[1] || "";
+        this._handleResponse(code, method, data);
+      } else {
+        const method = first.split(" ")[0];
+        this._handleRequest(method, data);
+      }
+    } catch (e) { /* malformed SIP — ignore */ }
+  }
+
+  _handleResponse(code, method, raw) {
+    if (method === "REGISTER") {
+      if (code === 200) {
+        this._registered = true;
+        this._onRegistered && this._onRegistered();
+      } else if (code === 401 || code === 407) {
+        this._handleDigestChallenge(code, raw, "REGISTER", "sip:" + this._domain(), this._regCallId);
+      }
+    } else if (method === "INVITE") {
+      if (code >= 100 && code < 200) return; // provisional
+      if (code === 200) this._handleInvite200OK(raw);
+      else if (code === 401 || code === 407) {
+        this._handleDigestChallenge(code, raw, "INVITE",
+          "sip:" + (this._activeBridge || this._domain()), this._callId);
+      } else if (code >= 300) {
+        // INVITE failed — clean up
+        this._cleanup();
+        this._callId = null;
+        this._onError && this._onError(new Error("SIP INVITE failed: " + code));
+      }
+    }
+  }
+
+  _handleRequest(method, raw) {
+    if (method === "INVITE") this._handleIncomingInvite(raw);
+    else if (method === "BYE") this._handleBye(raw);
+  }
+
+  // ── INVITE 200 OK (answer from Asterisk) ─────────────────────
+
+  async _handleInvite200OK(raw) {
+    if (!this._pc) return;
+    const sdp = this._body(raw);
+    if (!sdp) return;
+    try {
+      await this._pc.setRemoteDescription({ type: "answer", sdp });
+    } catch(e) { return; }
+    // ACK
+    const toHdr     = this._hdr(raw, "To") || "";
+    const fromHdr   = this._hdr(raw, "From") || "";
+    const callId    = this._hdr(raw, "Call-ID") || this._callId;
+    const contactHdr = this._hdr(raw, "Contact") || "";
+    const ackUri    = contactHdr.match(/<([^>]+)>/)?.[1] || "sip:" + this._domain();
+    const via       = `SIP/2.0/WSS ${this._domain()};branch=z9hG4bK${this._rand()};rport`;
+    const ack = `ACK ${ackUri} SIP/2.0\r\n` +
+      `Via: ${via}\r\nMax-Forwards: 70\r\n` +
+      `From: ${fromHdr}\r\nTo: ${toHdr}\r\n` +
+      `Call-ID: ${callId}\r\nCSeq: ${this._cseq++} ACK\r\nContent-Length: 0\r\n\r\n`;
+    this._send(ack);
+  }
+
+  // ── Incoming INVITE from Asterisk (bridge inviting us) ────────
+
+  async _handleIncomingInvite(raw) {
+    const from   = this._hdr(raw, "From") || "";
+    const to     = this._hdr(raw, "To") || "";
+    const callId = this._hdr(raw, "Call-ID") || this._rand(16);
+    const via    = this._hdr(raw, "Via") || "";
+    const cseq   = this._hdr(raw, "CSeq") || "1 INVITE";
+    const sdpOffer = this._body(raw);
+    // 100 Trying
+    this._send(this._buildResponse(100, "Trying", from, to, callId, via, cseq));
+
+    if (!sdpOffer) {
+      this._send(this._buildResponse(400, "Bad Request", from, to, callId, via, cseq));
+      return;
+    }
+    // Set up WebRTC
+    if (!this._pc) {
+      try {
+        this._localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+      } catch (e) {
+        this._send(this._buildResponse(486, "Busy Here", from, to, callId, via, cseq));
+        return;
+      }
+      this._pc = new RTCPeerConnection({ iceServers: this._iceServers });
+      this._pc.ontrack = (ev) => this._onAudioTrack && this._onAudioTrack(ev.streams?.[0] || null, ev.track);
+      for (const t of this._localStream.getAudioTracks()) this._pc.addTrack(t, this._localStream);
+    }
+
+    const toWithTag = to + ";tag=" + this._rand(8);
+    this._activeCallFrom = from;
+    this._activeCallVia  = via;
+    this._activeCallCseq = cseq;
+    this._activeCallToTag = toWithTag;
+    this._callId = callId;
+
+    await this._pc.setRemoteDescription({ type: "offer", sdp: sdpOffer });
+    const answer = await this._pc.createAnswer();
+    await this._pc.setLocalDescription(answer);
+    await this._waitICE();
+
+    this._send(this._buildResponse(200, "OK", from, toWithTag, callId, via, cseq,
+      this._pc.localDescription.sdp));
+  }
+
+  _handleBye(raw) {
+    const from   = this._hdr(raw, "From") || "";
+    const to     = this._hdr(raw, "To")   || "";
+    const callId = this._hdr(raw, "Call-ID") || "";
+    const via    = this._hdr(raw, "Via")  || "";
+    const cseq   = this._hdr(raw, "CSeq") || "1 BYE";
+    this._send(this._buildResponse(200, "OK", from, to, callId, via, cseq));
+    this._cleanup();
+    this._callId = null;
+    this._onBye && this._onBye();
+  }
+
+  // ── Digest auth ───────────────────────────────────────────────
+
+  _handleDigestChallenge(code, raw, method, uri, callId) {
+    const hdrName = code === 401 ? "WWW-Authenticate" : "Proxy-Authenticate";
+    const auth = this._hdr(raw, hdrName) || "";
+    const realm = auth.match(/realm="([^"]+)"/)?.[1] || this._domain();
+    const nonce = auth.match(/nonce="([^"]+)"/)?.[1] || "";
+    const ha1 = this._md5(this._user() + ":" + realm + ":" + this._password);
+    const ha2 = this._md5(method + ":" + uri);
+    const resp = this._md5(ha1 + ":" + nonce + ":" + ha2);
+    const aHdr = `Digest username="${this._user()}",realm="${realm}",nonce="${nonce}",` +
+      `uri="${uri}",response="${resp}",algorithm=MD5`;
+    const authLine = (code === 401 ? "Authorization" : "Proxy-Authorization") + ": " + aHdr;
+    if (method === "REGISTER") {
+      this._send(this._buildRequest("REGISTER", "sip:" + this._domain(), this._regCallId,
+        this._cseq++, "Expires: 3600\r\n" + authLine + "\r\n"));
+    } else if (method === "INVITE") {
+      // Re-INVITE with auth — need to regenerate offer
+      this.dial(this._activeBridge).catch(() => {});
+    }
+  }
+
+  // ── ICE gathering helper ──────────────────────────────────────
+
+  _waitICE() {
+    return new Promise((resolve) => {
+      if (!this._pc || this._pc.iceGatheringState === "complete") { resolve(); return; }
+      const done = () => { if (this._pc?.iceGatheringState === "complete") resolve(); };
+      this._pc.addEventListener("icegatheringstatechange", done);
+      setTimeout(resolve, 4000); // max wait
+    });
+  }
+
+  // ── Cleanup ───────────────────────────────────────────────────
+
+  _cleanup() {
+    if (this._pc) { this._pc.close(); this._pc = null; }
+    if (this._localStream) { this._localStream.getTracks().forEach(t => t.stop()); this._localStream = null; }
+  }
+
+  // ── MD5 (RFC 1321) — required for SIP Digest authentication ──
+  // Pure-JS implementation; no external deps.
+
+  _md5(str) {
+    const add = (a, b) => ((a + b) | 0);
+    const rl  = (n, s) => (n << s) | (n >>> (32 - s));
+    const S   = [7,12,17,22,7,12,17,22,7,12,17,22,7,12,17,22,
+                 5,9,14,20,5,9,14,20,5,9,14,20,5,9,14,20,
+                 4,11,16,23,4,11,16,23,4,11,16,23,4,11,16,23,
+                 6,10,15,21,6,10,15,21,6,10,15,21,6,10,15,21];
+    const K   = Array.from({length:64},(_,i)=>Math.floor(Math.abs(Math.sin(i+1))*0x100000000)>>>0);
+    const bytes = new TextEncoder().encode(str);
+    const n = bytes.length;
+    const padLen = (55 - n % 64 + 64) % 64;
+    const msg = new Uint8Array(n + 1 + padLen + 8);
+    msg.set(bytes); msg[n] = 0x80;
+    const dv = new DataView(msg.buffer);
+    dv.setUint32(n + 1 + padLen,     (n * 8) >>> 0,          true);
+    dv.setUint32(n + 1 + padLen + 4, Math.floor(n / 0x20000000), true);
+    let a=0x67452301, b=0xefcdab89, c=0x98badcfe, d=0x10325476;
+    for (let i = 0; i < msg.length; i += 64) {
+      const M = Array.from({length:16}, (_, j) => dv.getInt32(i + j*4, true));
+      let [A, B, C, D] = [a, b, c, d];
+      for (let j = 0; j < 64; j++) {
+        let F, g;
+        if      (j < 16) { F=(B&C)|(~B&D); g=j; }
+        else if (j < 32) { F=(D&B)|(~D&C); g=(5*j+1)%16; }
+        else if (j < 48) { F=B^C^D;        g=(3*j+5)%16; }
+        else             { F=C^(B|~D);     g=(7*j)%16; }
+        const temp = D;
+        D = C; C = B;
+        B = add(B, rl(add(add(add(A, F), M[g]), K[j]), S[j]));
+        A = temp;
+      }
+      a=add(a,A); b=add(b,B); c=add(c,C); d=add(d,D);
+    }
+    return [a,b,c,d].map(v =>
+      [(v>>>0)&0xff,(v>>>8)&0xff,(v>>>16)&0xff,(v>>>24)&0xff]
+        .map(byte => byte.toString(16).padStart(2,"0")).join("")
+    ).join("");
+  }
+}
+
 // ── Card class ────────────────────────────────────────────────────────
 
 class SimsonCard extends HTMLElement {
@@ -364,9 +735,16 @@ class SimsonCard extends HTMLElement {
     this._muted = false;
     this._micAllowed = null;
     this._audioQuality = 3;
+    this._connectionType = "";   // "host" | "srflx" (reflexive) | "relay" from RTCStats
     this._statsInterval = null;
     this._startingWebRTC = false;
     this._pendingOffer = null;
+    this._iceServers = null;     // fetched from /api/webrtc-config; fallback: ICE_SERVERS
+    this._webrtcConfig = null;   // full {ice_servers, sip} object from addon API
+
+    // SIP UA (used when call_type === "sip" to join Asterisk ConfBridge)
+    this._sipUA = null;
+    this._sipBridgeId = null;    // bridge extension to dial (e.g. "bridge-AbC123")
 
     // Persistent audio element
     this._remoteAudio = document.createElement("audio");
@@ -594,7 +972,7 @@ class SimsonCard extends HTMLElement {
   }
 
   _onHAIncomingCall(event) {
-    const { call_id, from_node_id, from_label, call_type, target_user_id } = event;
+    const { call_id, from_node_id, from_label, call_type, target_user_id, metadata } = event;
     if (target_user_id && this._hass?.user?.id && target_user_id !== this._hass.user.id) {
       this._ignoredCallId = call_id;
       return;
@@ -603,6 +981,8 @@ class SimsonCard extends HTMLElement {
     this._currentRemoteNode = from_node_id;
     this._incomingFrom = from_label || from_node_id;
     this._incomingCallType = call_type || "voice";
+    // Track SIP bridge ID so we can join the Asterisk ConfBridge on answer.
+    this._sipBridgeId = (call_type === "sip" && metadata?.sip_bridge_id) ? metadata.sip_bridge_id : null;
     this._playRingtone();
     this._showIncomingPopup();
     this._showBrowserNotification(this._incomingFrom, this._incomingCallType);
@@ -697,6 +1077,10 @@ class SimsonCard extends HTMLElement {
     this._dismissBrowserNotification();
     this._callStart = Date.now();
     this._callService("answer_call", { call_id: callId });
+    // If Asterisk ConfBridge bridge ID is known, join via SIP UA
+    if (this._sipBridgeId) {
+      this._startSIPCall(this._sipBridgeId).catch(e => console.error("[Simson] SIP answer start:", e));
+    }
   }
 
   _reject() {
@@ -777,10 +1161,31 @@ class SimsonCard extends HTMLElement {
 
   // ── WebRTC ──────────────────────────────────────────────────────────
 
+  // Fetch ICE/TURN servers and SIP config from the addon API.
+  // Falls back to the hardcoded ICE_SERVERS constant if unavailable.
+  async _fetchWebRTCConfig() {
+    if (this._webrtcConfig) return this._webrtcConfig; // cache
+    try {
+      const token = this._hass?.auth?.data?.access_token;
+      const resp = await fetch("/api/webrtc-config", {
+        headers: token ? { Authorization: "Bearer " + token } : {},
+      });
+      if (resp.ok) {
+        this._webrtcConfig = await resp.json();
+        return this._webrtcConfig;
+      }
+    } catch (e) { /* fall through to defaults */ }
+    return { ice_servers: ICE_SERVERS, sip: { enabled: false } };
+  }
+
   async _startWebRTC() {
     if (this._pc) return;
     if (this._startingWebRTC) return;
     this._startingWebRTC = true;
+
+    // Fetch TURN-enabled ICE servers before creating the PeerConnection.
+    const wrtcCfg = await this._fetchWebRTCConfig();
+    const iceServers = wrtcCfg.ice_servers || ICE_SERVERS;
 
     // Try mic — works on HTTP for localhost/local IPs too. Never hard-block on context.
     if (navigator.mediaDevices?.getUserMedia) {
@@ -795,7 +1200,7 @@ class SimsonCard extends HTMLElement {
       this._micAllowed = false;
     }
 
-    this._pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
+    this._pc = new RTCPeerConnection({ iceServers });
     this._pendingCandidates = [];
     this._makingOffer = false;
 
@@ -925,10 +1330,65 @@ class SimsonCard extends HTMLElement {
     this._makingOffer = false;
     this._muted = false;
     this._audioQuality = 3;
+    this._connectionType = "";
     this._pendingCandidates = [];
+    // Tear down SIP UA if active (SIP phone call path)
+    this._cleanupSIPUA();
+    this._sipBridgeId = null;
     this._stopRingtone();
     this._removePopup();
     this._dismissBrowserNotification();
+  }
+
+  _cleanupSIPUA() {
+    if (this._sipUA) {
+      try { this._sipUA.disconnect(); } catch (e) { /* ignore */ }
+      this._sipUA = null;
+    }
+  }
+
+  // Start the SIP UA and dial into an Asterisk ConfBridge.
+  async _startSIPCall(bridgeId) {
+    const cfg = await this._fetchWebRTCConfig();
+    const sip = cfg.sip || {};
+    if (!sip.enabled || !sip.ws_url || !sip.username || !sip.password) {
+      console.warn("Simson: SIP config missing — cannot join Asterisk bridge");
+      return;
+    }
+    const uri = "sip:" + sip.username + "@" + sip.domain;
+    this._sipUA = new MinimalSIPUA({
+      uri,
+      password: sip.password,
+      wsUrl: sip.ws_url,
+      iceServers: cfg.ice_servers || ICE_SERVERS,
+      onAudioTrack: (stream, track) => {
+        if (stream) {
+          this._remoteAudio.srcObject = stream;
+        } else {
+          const ms = new MediaStream();
+          ms.addTrack(track);
+          this._remoteAudio.srcObject = ms;
+        }
+        this._remoteAudio.play().catch(() => {});
+      },
+      onRegistered: () => {
+        this._sipUA._activeBridge = bridgeId;
+        this._sipUA.dial(bridgeId).catch(e => {
+          console.error("Simson SIP dial error:", e);
+          this._cleanupSIPUA();
+        });
+      },
+      onError: (e) => {
+        console.error("Simson SIP UA error:", e);
+        this._cleanupSIPUA();
+        this._render();
+      },
+      onBye: () => {
+        this._cleanupSIPUA();
+        this._render();
+      },
+    });
+    this._sipUA.connect();
   }
 
   async _updateQuality() {
@@ -941,6 +1401,13 @@ class SimsonCard extends HTMLElement {
           jitter = report.jitter || 0;
           packetsLost = report.packetsLost || 0;
           packetsReceived = report.packetsReceived || 1;
+        }
+        // Track which ICE candidate type is active: host / srflx / relay
+        if (report.type === "candidate-pair" && report.state === "succeeded") {
+          const remoteReport = stats.get ? stats.get(report.remoteCandidateId) : null;
+          if (remoteReport?.candidateType) {
+            this._connectionType = remoteReport.candidateType; // "host"|"srflx"|"relay"
+          }
         }
       });
       const loss = packetsLost / Math.max(packetsReceived, 1);
@@ -1279,9 +1746,17 @@ class SimsonCard extends HTMLElement {
     const dotCls = connected ? "dot-ok" : "dot-err";
     const accountId = this._attr("connection", "account_id", "");
 
-    // Quality bars
+    // Quality bars + connection type badge
     const q = this._audioQuality;
+    const connBadge = this._connectionType === "relay"
+      ? `<span class="conn-badge relay" title="Audio routed via TURN relay">relay</span>`
+      : this._connectionType === "srflx"
+      ? `<span class="conn-badge srflx" title="Audio via STUN reflexive">reflex</span>`
+      : this._connectionType === "host"
+      ? `<span class="conn-badge host" title="Direct audio path">direct</span>`
+      : "";
     const qualityHtml = isActive && hasWebRTC ? `
+      ${connBadge}
       <div class="quality-bar" title="Audio quality">
         <div class="bar ${q >= 1 ? "good" : "off"}" style="height:4px"></div>
         <div class="bar ${q >= 2 ? "good" : q >= 1 ? "fair" : "off"}" style="height:8px"></div>
