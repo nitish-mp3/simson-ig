@@ -36,7 +36,7 @@ logger = logging.getLogger(__name__)
 
 SCAN_INTERVAL = timedelta(seconds=5)
 _CARD_JS_PATH = "/simson/www/simson-card.js"
-_CARD_URL = f"{_CARD_JS_PATH}?v=4.2.0"  # bump this whenever the card JS changes
+_CARD_URL = f"{_CARD_JS_PATH}?v=4.5.0"  # bump this whenever the card JS changes
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -152,8 +152,9 @@ def _register_services(hass: HomeAssistant, client: SimsonApiClient) -> None:
 
     async def handle_answer_call(call: ServiceCall) -> None:
         call_id = call.data["call_id"]
+        answered_by_user_id = call.data.get("answered_by_user_id", "")
         try:
-            await client.answer_call(call_id)
+            await client.answer_call(call_id, answered_by_user_id=answered_by_user_id)
         except Exception as err:
             logger.error("Failed to answer call: %s", err)
 

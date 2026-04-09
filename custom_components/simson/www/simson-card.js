@@ -1,7 +1,10 @@
 /**
- * Simson Call Relay — Lovelace Card v4.4.0
+ * Simson Call Relay — Lovelace Card v4.5.0
  *
  * Full WebRTC voice calling between HA instances + Asterisk SIP phone support.
+ * v4.5.0: Fixed one-way audio (caller=impolite, callee=polite, deferred track add),
+ *         Call-All dismiss (answered_by_user_id propagation), ICE restart on failure,
+ *         precise call history (missed/answered/callback), SIP broadcast to all nodes.
  * v4.4.0: TURN server support (fixes audio on HTTPS/symmetric NAT), inline MinimalSIPUA
  *         for joining Asterisk ConfBridges, dynamic ICE from /api/webrtc-config,
  *         real RTCStats quality + connection-type badge (relay/reflexive/host).
@@ -19,7 +22,7 @@
  *     - node_id: office2
  */
 
-const VERSION = "4.4.0";
+const VERSION = "4.5.0";
 
 // Default ICE servers (fallback when /api/webrtc-config is unavailable).
 const ICE_SERVERS = [
@@ -274,12 +277,21 @@ const STYLES = `
     font-size: 14px; font-weight: 600; white-space: nowrap;
     overflow: hidden; text-overflow: ellipsis;
   }
-  .history-detail { font-size: 11px; color: #666; display: flex; gap: 8px; flex-wrap: wrap; }
+  .history-detail { font-size: 11px; color: #666; display: flex; gap: 4px; flex-wrap: wrap; align-items: center; }
+  .history-sep { color: #444; }
+  .history-state.state-missed { color: #f44336; font-weight: 600; }
+  .history-state.state-answered { color: #4caf50; }
   .history-time { font-size: 11px; color: #555; text-align: right; white-space: nowrap; }
   .history-duration {
     font-size: 12px; font-weight: 600; color: #888; text-align: right;
     font-variant-numeric: tabular-nums;
   }
+  .history-callback {
+    background: none; border: 1px solid #333; border-radius: 50%; width: 28px; height: 28px;
+    cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 14px;
+    transition: background .2s, border-color .2s; padding: 0;
+  }
+  .history-callback:hover { background: #ffffff15; border-color: #4caf50; }
   .history-empty {
     text-align: center; padding: 32px 16px; color: #444;
   }
@@ -771,9 +783,11 @@ class SimsonCard extends HTMLElement {
     // Call context
     this._currentCallId = null;
     this._currentRemoteNode = null;
+    this._isCaller = false;       // true = we placed the call (we create offer)
     this._polite = false;
     this._makingOffer = false;
     this._pendingCandidates = [];
+    this._answeredByMe = false;   // track if this user answered the call
 
     // Ringtone
     this._ringCtx = null;
@@ -940,7 +954,7 @@ class SimsonCard extends HTMLElement {
   }
 
   _onHACallStatus(event) {
-    const { call_id, status, direction, remote_node_id, target_user_id, caller_user_id } = event;
+    const { call_id, status, direction, remote_node_id, target_user_id, caller_user_id, answered_by_user_id } = event;
     // Only react to events that belong to this session's user.
     const myUserId = this._hass?.user?.id || "";
     const isMyEvent = call_id === this._currentCallId ||
@@ -948,9 +962,21 @@ class SimsonCard extends HTMLElement {
       (direction === "outgoing" && (!caller_user_id || caller_user_id === myUserId));
     if (!isMyEvent) return;
     if (status === "active") {
+      // If another user on this node answered (call-all), dismiss for me.
+      if (direction === "incoming" && answered_by_user_id && answered_by_user_id !== myUserId) {
+        this._stopRingtone();
+        this._removePopup();
+        this._dismissBrowserNotification();
+        this._currentCallId = null;
+        this._currentRemoteNode = null;
+        this._render();
+        return;
+      }
       this._currentCallId = call_id;
       this._currentRemoteNode = remote_node_id;
-      this._polite = (this._nodeId() || "") < (remote_node_id || "");
+      // Caller creates the offer (impolite), callee waits for offer (polite).
+      this._isCaller = direction === "outgoing";
+      this._polite = !this._isCaller;
       if (!this._callStart) this._callStart = Date.now();
       this._stopRingtone();
       this._removePopup();
@@ -965,6 +991,8 @@ class SimsonCard extends HTMLElement {
       this._callStart = null;
       this._currentCallId = null;
       this._currentRemoteNode = null;
+      this._isCaller = false;
+      this._answeredByMe = false;
       // Refresh history after call ends.
       setTimeout(() => this._loadHistory(), 2000);
       this._render();
@@ -1076,7 +1104,11 @@ class SimsonCard extends HTMLElement {
     this._removePopup();
     this._dismissBrowserNotification();
     this._callStart = Date.now();
-    this._callService("answer_call", { call_id: callId });
+    this._answeredByMe = true;
+    this._callService("answer_call", {
+      call_id: callId,
+      answered_by_user_id: this._hass?.user?.id || "",
+    });
     // If Asterisk ConfBridge bridge ID is known, join via SIP UA
     if (this._sipBridgeId) {
       this._startSIPCall(this._sipBridgeId).catch(e => console.error("[Simson] SIP answer start:", e));
@@ -1204,7 +1236,9 @@ class SimsonCard extends HTMLElement {
     this._pendingCandidates = [];
     this._makingOffer = false;
 
-    if (this._localStream) {
+    // CALLER adds tracks immediately → triggers onnegotiationneeded → creates offer.
+    // CALLEE defers — tracks are added in _handleWebRTCSignal when we receive the offer.
+    if (this._isCaller && this._localStream) {
       this._localStream.getTracks().forEach(track => {
         this._pc.addTrack(track, this._localStream);
       });
@@ -1248,9 +1282,20 @@ class SimsonCard extends HTMLElement {
 
     this._pc.onconnectionstatechange = () => {
       const state = this._pc?.connectionState;
-      if (state === "connected") this._audioQuality = 3;
+      if (state === "connected") { this._audioQuality = 3; this._iceRestartAttempts = 0; }
       else if (state === "disconnected") this._audioQuality = 1;
-      else if (state === "failed") { this._audioQuality = 0; this._cleanupWebRTC(); }
+      else if (state === "failed") {
+        // Attempt ICE restart before giving up (fixes intermittent drops).
+        if (!this._iceRestartAttempts) this._iceRestartAttempts = 0;
+        if (this._iceRestartAttempts < 2 && this._isCaller && this._pc) {
+          this._iceRestartAttempts++;
+          console.warn("[Simson] ICE failed, attempting restart", this._iceRestartAttempts);
+          this._pc.restartIce();
+          return;
+        }
+        this._audioQuality = 0;
+        this._cleanupWebRTC();
+      }
       this._render();
     };
 
@@ -1278,6 +1323,16 @@ class SimsonCard extends HTMLElement {
       if (collision) {
         if (!this._polite) return;
         await this._pc.setLocalDescription({ type: "rollback" });
+      }
+
+      // Callee: add local tracks now (before creating answer) so SDP includes audio.
+      if (!this._isCaller && this._localStream) {
+        const existingSenders = this._pc.getSenders();
+        if (!existingSenders.some(s => s.track)) {
+          this._localStream.getTracks().forEach(track => {
+            this._pc.addTrack(track, this._localStream);
+          });
+        }
       }
 
       await this._pc.setRemoteDescription(new RTCSessionDescription(data));
@@ -1332,6 +1387,9 @@ class SimsonCard extends HTMLElement {
     this._audioQuality = 3;
     this._connectionType = "";
     this._pendingCandidates = [];
+    this._isCaller = false;
+    this._answeredByMe = false;
+    this._iceRestartAttempts = 0;
     // Tear down SIP UA if active (SIP phone call path)
     this._cleanupSIPUA();
     this._sipBridgeId = null;
@@ -1712,7 +1770,8 @@ class SimsonCard extends HTMLElement {
         if (!(this._ignoredCallId && this._ignoredCallId === callId)) {
           this._currentCallId = callId;
           this._currentRemoteNode = this._activeCallAttr("remote_node_id", "");
-          this._polite = (nodeId || "") < (this._currentRemoteNode || "");
+          this._isCaller = false;
+          this._polite = true;
           this._incomingFrom = this._activeCallAttr("remote_label") || this._currentRemoteNode || "Unknown";
           this._incomingCallType = this._activeCallAttr("call_type") || "voice";
           this._playRingtone();
@@ -1723,7 +1782,8 @@ class SimsonCard extends HTMLElement {
         this._stopRingtone(); this._removePopup(); this._dismissBrowserNotification();
         this._currentCallId = callId;
         this._currentRemoteNode = this._activeCallAttr("remote_node_id", "");
-        this._polite = (nodeId || "") < (this._currentRemoteNode || "");
+        this._isCaller = direction === "outgoing";
+        this._polite = !this._isCaller;
         if (!this._callStart) this._callStart = Date.now();
         this._startWebRTC();
       } else if (effectiveCallState === "idle" && prev !== "idle") {
@@ -2126,6 +2186,24 @@ class SimsonCard extends HTMLElement {
       });
     });
 
+    // History callback buttons
+    root.querySelectorAll(".history-callback").forEach(btn => {
+      btn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const nodeId = btn.dataset.callback;
+        if (nodeId) {
+          if (nodeId.startsWith("sip:") || nodeId.startsWith("asterisk:")) {
+            const ext = nodeId.split(":")[1];
+            this._dialTarget(`asterisk_${ext}`, "asterisk", ext);
+          } else {
+            this._userPickerNodeId = nodeId;
+            this._userPickerTargetId = nodeId;
+            this._callService("get_remote_users", { node_id: nodeId });
+          }
+        }
+      });
+    });
+
     if (isActive) this._updateTimer();
   }
 
@@ -2134,26 +2212,31 @@ class SimsonCard extends HTMLElement {
   _renderHistoryItem(h) {
     const isMissed = ["missed", "declined", "timeout", "failed"].includes(h.state);
     const isIncoming = h.direction === "incoming";
+    const isAnswered = h.state === "ended" && h.duration > 0;
     const iconClass = isMissed ? "missed" : (isIncoming ? "incoming" : "outgoing");
-    const arrow = isIncoming ? "\u2B07\uFE0F" : "\u2B06\uFE0F";
+    // Better icons: ↙ incoming-answered, ↗ outgoing-answered, ↙✗ missed, ↗✗ failed
+    const icon = isMissed ? (isIncoming ? "📵" : "❌") : (isIncoming ? "📲" : "📤");
     const name = h.remote_label || h.remote_node_id || "Unknown";
     const stateLabel = this._callStateLabel(h.state);
     const duration = h.duration > 0 ? this._formatDuration(h.duration) : "";
     const time = h.started_at ? this._formatTime(h.started_at) : "";
+    // Build a callback data attribute for the callback button.
+    const callbackData = h.remote_node_id ? `data-callback="${this._esc(h.remote_node_id)}"` : "";
 
     return `
       <div class="history-item">
-        <div class="history-icon ${iconClass}">${arrow}</div>
+        <div class="history-icon ${iconClass}">${icon}</div>
         <div class="history-info">
           <div class="history-name">${this._esc(name)}</div>
           <div class="history-detail">
-            <span>${stateLabel}</span>
-            <span>${this._esc(h.call_type || "voice")}</span>
+            <span class="history-state ${isMissed ? "state-missed" : isAnswered ? "state-answered" : ""}">${stateLabel}</span>
+            ${duration ? `<span class="history-sep">·</span><span>${duration}</span>` : ""}
+            <span class="history-sep">·</span><span>${this._esc(h.call_type || "voice")}</span>
           </div>
         </div>
-        <div style="text-align:right">
-          ${duration ? `<div class="history-duration">${duration}</div>` : ""}
+        <div style="text-align:right;display:flex;align-items:center;gap:8px">
           <div class="history-time">${time}</div>
+          ${callbackData ? `<button class="history-callback" ${callbackData} title="Call back">📞</button>` : ""}
         </div>
       </div>
     `;

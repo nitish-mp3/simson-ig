@@ -67,8 +67,11 @@ class SimsonApiClient:
             data["caller_user_id"] = caller_user_id
         return await self._post("/api/call", data)
 
-    async def answer_call(self, call_id: str) -> dict:
-        return await self._post("/api/answer", {"call_id": call_id})
+    async def answer_call(self, call_id: str, answered_by_user_id: str = "") -> dict:
+        data = {"call_id": call_id}
+        if answered_by_user_id:
+            data["answered_by_user_id"] = answered_by_user_id
+        return await self._post("/api/answer", data)
 
     async def reject_call(self, call_id: str, reason: str = "rejected") -> dict:
         return await self._post("/api/reject", {"call_id": call_id, "reason": reason})

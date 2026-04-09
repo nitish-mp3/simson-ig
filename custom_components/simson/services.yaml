@@ -32,6 +32,13 @@ answer_call:
       example: "550e8400-e29b-41d4-a716-446655440000"
       selector:
         text:
+    answered_by_user_id:
+      name: Answered By User ID
+      description: The HA user ID of the person answering (for call-all dismiss).
+      required: false
+      example: "abc123"
+      selector:
+        text:
 
 reject_call:
   name: Reject Call
