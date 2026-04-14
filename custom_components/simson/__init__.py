@@ -193,6 +193,7 @@ def _register_services(hass: HomeAssistant, client: SimsonApiClient) -> None:
             handle_answer_call,
             schema=vol.Schema({
                 vol.Required("call_id"): str,
+                vol.Optional("answered_by_user_id", default=""): str,
             }),
         )
         hass.services.async_register(
