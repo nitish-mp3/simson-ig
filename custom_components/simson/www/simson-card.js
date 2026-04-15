@@ -1,7 +1,8 @@
 /**
- * Simson Call Relay — Lovelace Card v4.5.2
+ * Simson Call Relay — Lovelace Card v4.5.3
  *
  * Full WebRTC voice calling between HA instances + Asterisk SIP phone support.
+ * v4.5.3: Fix input stability so node/SIP fields keep typed text across rerenders.
  * v4.5.2: Keep SIP manual dial compatible with local AMI and central VPS routing.
  * v4.5.1: Always show SIP dial section and route manual SIP extension dials to central sip:EXT.
  * v4.5.0: Fixed one-way audio (caller=impolite, callee=polite, deferred track add),
@@ -24,7 +25,7 @@
  *     - node_id: office2
  */
 
-const VERSION = "4.5.2";
+const VERSION = "4.5.3";
 
 // Default ICE servers (fallback when /api/webrtc-config is unavailable).
 const ICE_SERVERS = [
@@ -730,6 +731,8 @@ class SimsonCard extends HTMLElement {
 
     // Node/user selection state
     this._selectedNode = "";
+    this._nodeInputDraft = "";
+    this._sipDialDraft = "";
     this._remoteUsers = [];
     this._usersLoading = false;
     this._usersCache = {};  // nodeId -> { users, timestamp }
@@ -1905,7 +1908,7 @@ class SimsonCard extends HTMLElement {
         <div class="section-label">Select Node</div>
         <div class="select-wrap no-arrow">
           <input id="node-input" type="text" placeholder="Enter node ID (e.g. office, central2)"
-            value="${this._esc(this._selectedNode)}" ${!connected ? "disabled" : ""}
+            value="${this._esc(this._nodeInputDraft || this._selectedNode)}" ${!connected ? "disabled" : ""}
             list="node-suggestions" autocomplete="off" />
         </div>
         <datalist id="node-suggestions">
@@ -1971,6 +1974,7 @@ class SimsonCard extends HTMLElement {
               <div class="section-label">\u{1F4DE} Asterisk / SIP</div>
               <div class="sip-dial-row">
                 <input id="sip-ext-input" class="sip-ext-input" type="text"
+                  value="${this._esc(this._sipDialDraft)}"
                   inputmode="numeric" placeholder="Dial extension\u2026 e.g. 101"
                   ${!connected ? "disabled" : ""} />
                 <button class="sip-ext-btn" id="sip-ext-call" ${!connected ? "disabled" : ""}>Call</button>
@@ -2081,8 +2085,21 @@ class SimsonCard extends HTMLElement {
 
     // Preserve focus
     const root = this._root();
-    const wasNodeInputFocused = root.activeElement?.id === "node-input";
-    const cursorPos = wasNodeInputFocused ? root.querySelector("#node-input")?.selectionStart : null;
+    const activeId = root.activeElement?.id || "";
+    const nodeInputBefore = root.querySelector("#node-input");
+    const sipInputBefore = root.querySelector("#sip-ext-input");
+    const wasNodeInputFocused = activeId === "node-input";
+    const wasSipInputFocused = activeId === "sip-ext-input";
+    const nodeCursorPos = wasNodeInputFocused ? nodeInputBefore?.selectionStart : null;
+    const sipCursorPos = wasSipInputFocused ? sipInputBefore?.selectionStart : null;
+
+    if (wasNodeInputFocused && nodeInputBefore) {
+      this._nodeInputDraft = nodeInputBefore.value;
+      this._selectedNode = nodeInputBefore.value;
+    }
+    if (wasSipInputFocused && sipInputBefore) {
+      this._sipDialDraft = sipInputBefore.value;
+    }
 
     root.innerHTML = html;
 
@@ -2105,10 +2122,12 @@ class SimsonCard extends HTMLElement {
     const nodeInput = root.querySelector("#node-input");
     if (nodeInput) {
       nodeInput.addEventListener("input", (e) => {
-        this._selectedNode = e.target.value.trim();
+        this._nodeInputDraft = e.target.value;
+        this._selectedNode = e.target.value;
       });
       nodeInput.addEventListener("change", (e) => {
         const val = e.target.value.trim();
+        this._nodeInputDraft = val;
         this._selectedNode = val;
         if (val) {
           this._fetchRemoteUsers(val);
@@ -2121,6 +2140,7 @@ class SimsonCard extends HTMLElement {
         if (e.key === "Enter") {
           const val = e.target.value.trim();
           if (val) {
+            this._nodeInputDraft = val;
             this._selectedNode = val;
             this._fetchRemoteUsers(val);
             this._render();
@@ -2129,7 +2149,7 @@ class SimsonCard extends HTMLElement {
       });
       if (wasNodeInputFocused) {
         nodeInput.focus();
-        if (cursorPos !== null) nodeInput.setSelectionRange(cursorPos, cursorPos);
+        if (nodeCursorPos !== null) nodeInput.setSelectionRange(nodeCursorPos, nodeCursorPos);
       }
     }
 
@@ -2137,6 +2157,7 @@ class SimsonCard extends HTMLElement {
     root.querySelector("#btn-call-manual")?.addEventListener("click", () => {
       const val = root.querySelector("#node-input")?.value?.trim();
       if (val) {
+        this._nodeInputDraft = val;
         this._selectedNode = val;
         this._userPickerNodeId = val;
         this._userPickerTargetId = "";
@@ -2167,12 +2188,22 @@ class SimsonCard extends HTMLElement {
     // SIP: manual extension input + call button
     const sipInput = root.querySelector("#sip-ext-input");
     const sipCallBtn = root.querySelector("#sip-ext-call");
+    sipInput?.addEventListener("input", (e) => {
+      this._sipDialDraft = e.target.value;
+    });
     const doSipDial = () => {
-      const ext = sipInput?.value?.trim();
-      if (ext) this._dialSIPExtension(ext);
+      const ext = (sipInput?.value ?? this._sipDialDraft).trim();
+      if (ext) {
+        this._sipDialDraft = ext;
+        this._dialSIPExtension(ext);
+      }
     };
     sipCallBtn?.addEventListener("click", doSipDial);
     sipInput?.addEventListener("keydown", e => { if (e.key === "Enter") doSipDial(); });
+    if (wasSipInputFocused && sipInput) {
+      sipInput.focus();
+      if (sipCursorPos !== null) sipInput.setSelectionRange(sipCursorPos, sipCursorPos);
+    }
 
     // SIP: device row clicks
     root.querySelectorAll(".sip-device:not(.disabled)").forEach(el => {
