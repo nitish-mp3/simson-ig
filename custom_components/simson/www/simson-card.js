@@ -1,7 +1,8 @@
 /**
- * Simson Call Relay — Lovelace Card v4.5.0
+ * Simson Call Relay — Lovelace Card v4.5.1
  *
  * Full WebRTC voice calling between HA instances + Asterisk SIP phone support.
+ * v4.5.1: Always show SIP dial section and route manual SIP extension dials to central sip:EXT.
  * v4.5.0: Fixed one-way audio (caller=impolite, callee=polite, deferred track add),
  *         Call-All dismiss (answered_by_user_id propagation), ICE restart on failure,
  *         precise call history (missed/answered/callback), SIP broadcast to all nodes.
@@ -22,7 +23,7 @@
  *     - node_id: office2
  */
 
-const VERSION = "4.5.0";
+const VERSION = "4.5.1";
 
 // Default ICE servers (fallback when /api/webrtc-config is unavailable).
 const ICE_SERVERS = [
@@ -1098,6 +1099,17 @@ class SimsonCard extends HTMLElement {
     });
   }
 
+  _dialSIPExtension(extension) {
+    if (!extension) return;
+    this._currentRemoteNode = `sip:${extension}`;
+    this._callStart = null;
+    this._callService("make_call", {
+      target_node_id: `sip:${extension}`,
+      call_type: "sip",
+      caller_user_id: this._hass?.user?.id || "",
+    });
+  }
+
   _answer() {
     const callId = this._activeCallAttr("call_id") || this._currentCallId;
     this._stopRingtone();
@@ -1945,57 +1957,55 @@ class SimsonCard extends HTMLElement {
       }
 
       // Non-node targets
-      if (nonNodeTargets.length > 0) {
-        const icons = { device: "\u{1F4F1}", asterisk: "\u{1F4DE}", queue: "\u{1F465}" };
-        const labels = { device: "Devices", asterisk: "Asterisk / SIP", queue: "Queues" };
-        for (const type of ["asterisk", "device", "queue"]) {
-          const targets = nonNodeTargets.filter(t => t.type === type);
-          if (type !== "asterisk" && targets.length === 0) continue;
+      const icons = { device: "\u{1F4F1}", asterisk: "\u{1F4DE}", queue: "\u{1F465}" };
+      const labels = { device: "Devices", asterisk: "Asterisk / SIP", queue: "Queues" };
+      for (const type of ["asterisk", "device", "queue"]) {
+        const targets = nonNodeTargets.filter(t => t.type === type);
+        if (type !== "asterisk" && targets.length === 0) continue;
 
-          if (type === "asterisk") {
-            // Enhanced SIP section: manual dial input + list-style device rows
-            dialHtml += `
-              <div class="target-section">
-                <div class="section-label">\u{1F4DE} Asterisk / SIP</div>
-                <div class="sip-dial-row">
-                  <input id="sip-ext-input" class="sip-ext-input" type="text"
-                    inputmode="numeric" placeholder="Dial extension\u2026 e.g. 101"
-                    ${!connected ? "disabled" : ""} />
-                  <button class="sip-ext-btn" id="sip-ext-call" ${!connected ? "disabled" : ""}>Call</button>
-                </div>
-                ${targets.map(t => `
-                  <div class="sip-device${!connected ? " disabled" : ""}"
-                    data-tid="${this._esc(t.id)}" data-ttype="asterisk"
-                    data-tnodeid="${this._esc(t.node_id || t.id)}">
-                    <div class="sip-icon">${t.icon || "\u{1F4DE}"}</div>
-                    <div class="sip-info">
-                      <div class="sip-label">${this._esc(t.label || t.id)}</div>
-                      <div class="sip-ext">Ext.\u00A0${this._esc(t.extension || t.label || t.id)}\u00A0\u00B7\u00A0IP Phone / SIP Device</div>
-                    </div>
-                    <div class="sip-arrow">\u2192</div>
+        if (type === "asterisk") {
+          // Always show SIP section so users can dial extension even with no configured targets.
+          dialHtml += `
+            <div class="target-section">
+              <div class="section-label">\u{1F4DE} Asterisk / SIP</div>
+              <div class="sip-dial-row">
+                <input id="sip-ext-input" class="sip-ext-input" type="text"
+                  inputmode="numeric" placeholder="Dial extension\u2026 e.g. 101"
+                  ${!connected ? "disabled" : ""} />
+                <button class="sip-ext-btn" id="sip-ext-call" ${!connected ? "disabled" : ""}>Call</button>
+              </div>
+              ${targets.map(t => `
+                <div class="sip-device${!connected ? " disabled" : ""}"
+                  data-tid="${this._esc(t.id)}" data-ttype="asterisk"
+                  data-tnodeid="${this._esc(t.node_id || t.id)}">
+                  <div class="sip-icon">${t.icon || "\u{1F4DE}"}</div>
+                  <div class="sip-info">
+                    <div class="sip-label">${this._esc(t.label || t.id)}</div>
+                    <div class="sip-ext">Ext.\u00A0${this._esc(t.extension || t.label || t.id)}\u00A0\u00B7\u00A0IP Phone / SIP Device</div>
                   </div>
+                  <div class="sip-arrow">\u2192</div>
+                </div>
+              `).join("")}
+            </div>
+          `;
+        } else {
+          if (targets.length === 0) continue;
+          dialHtml += `
+            <div class="target-section">
+              <div class="section-label">${icons[type] || ""} ${labels[type] || type}</div>
+              <div class="target-grid">
+                ${targets.map(t => `
+                  <button class="btn-target type-${this._esc(type)}"
+                    data-tid="${this._esc(t.id)}" data-ttype="${this._esc(type)}"
+                    data-tnodeid="${this._esc(t.node_id || t.id)}"
+                    ${!connected ? "disabled" : ""}>
+                    <span class="target-icon">${t.icon || icons[type]}</span>
+                    <span class="target-label">${this._esc(t.label || t.id)}</span>
+                  </button>
                 `).join("")}
               </div>
-            `;
-          } else {
-            if (targets.length === 0) continue;
-            dialHtml += `
-              <div class="target-section">
-                <div class="section-label">${icons[type] || ""} ${labels[type] || type}</div>
-                <div class="target-grid">
-                  ${targets.map(t => `
-                    <button class="btn-target type-${this._esc(type)}"
-                      data-tid="${this._esc(t.id)}" data-ttype="${this._esc(type)}"
-                      data-tnodeid="${this._esc(t.node_id || t.id)}"
-                      ${!connected ? "disabled" : ""}>
-                      <span class="target-icon">${t.icon || icons[type]}</span>
-                      <span class="target-label">${this._esc(t.label || t.id)}</span>
-                    </button>
-                  `).join("")}
-                </div>
-              </div>
-            `;
-          }
+            </div>
+          `;
         }
       }
 
@@ -2158,7 +2168,7 @@ class SimsonCard extends HTMLElement {
     const sipCallBtn = root.querySelector("#sip-ext-call");
     const doSipDial = () => {
       const ext = sipInput?.value?.trim();
-      if (ext) this._dialTarget(`asterisk_${ext}`, "asterisk", ext);
+      if (ext) this._dialSIPExtension(ext);
     };
     sipCallBtn?.addEventListener("click", doSipDial);
     sipInput?.addEventListener("keydown", e => { if (e.key === "Enter") doSipDial(); });
@@ -2194,7 +2204,7 @@ class SimsonCard extends HTMLElement {
         if (nodeId) {
           if (nodeId.startsWith("sip:") || nodeId.startsWith("asterisk:")) {
             const ext = nodeId.split(":")[1];
-            this._dialTarget(`asterisk_${ext}`, "asterisk", ext);
+            this._dialSIPExtension(ext);
           } else {
             this._userPickerNodeId = nodeId;
             this._userPickerTargetId = nodeId;
