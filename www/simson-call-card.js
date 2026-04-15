@@ -1,7 +1,8 @@
 /**
- * Simson Call Relay — Lovelace Card v4.5.1
+ * Simson Call Relay — Lovelace Card v4.5.2
  *
  * Full WebRTC voice calling between HA instances + Asterisk SIP phone support.
+ * v4.5.2: Keep SIP manual dial compatible with local AMI and central VPS routing.
  * v4.5.1: Always show SIP dial section and route manual SIP extension dials to central sip:EXT.
  * v4.5.0: Fixed one-way audio (caller=impolite, callee=polite, deferred track add),
  *         Call-All dismiss (answered_by_user_id propagation), ICE restart on failure,
@@ -23,7 +24,7 @@
  *     - node_id: office2
  */
 
-const VERSION = "4.5.1";
+const VERSION = "4.5.2";
 
 // Default ICE servers (fallback when /api/webrtc-config is unavailable).
 const ICE_SERVERS = [
@@ -1101,10 +1102,10 @@ class SimsonCard extends HTMLElement {
 
   _dialSIPExtension(extension) {
     if (!extension) return;
-    this._currentRemoteNode = `sip:${extension}`;
+    this._currentRemoteNode = extension;
     this._callStart = null;
     this._callService("make_call", {
-      target_node_id: `sip:${extension}`,
+      target_id: `asterisk_${extension}`,
       call_type: "sip",
       caller_user_id: this._hass?.user?.id || "",
     });
