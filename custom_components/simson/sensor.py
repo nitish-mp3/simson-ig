@@ -114,6 +114,7 @@ class SimsonCallStateSensor(SimsonBaseSensor):
                 "remote_node_id": active.get("remote_node_id", ""),
                 "remote_label": active.get("remote_label", ""),
                 "call_type": active.get("call_type", ""),
+                "sip_bridge_id": active.get("sip_bridge_id", ""),
                 "started_at": active.get("started_at", ""),
                 "target_user_id": active.get("target_user_id", ""),
                 "caller_user_id": active.get("caller_user_id", ""),

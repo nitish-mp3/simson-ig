@@ -1,7 +1,8 @@
 /**
- * Simson Call Relay — Lovelace Card v4.5.3
+ * Simson Call Relay — Lovelace Card v4.5.4
  *
  * Full WebRTC voice calling between HA instances + Asterisk SIP phone support.
+ * v4.5.4: Route SIP active calls through SIP UA bridge path and consume sip_bridge_id from status events.
  * v4.5.3: Fix input stability so node/SIP fields keep typed text across rerenders.
  * v4.5.2: Keep SIP manual dial compatible with local AMI and central VPS routing.
  * v4.5.1: Always show SIP dial section and route manual SIP extension dials to central sip:EXT.
@@ -25,7 +26,7 @@
  *     - node_id: office2
  */
 
-const VERSION = "4.5.3";
+const VERSION = "4.5.4";
 
 // Default ICE servers (fallback when /api/webrtc-config is unavailable).
 const ICE_SERVERS = [
@@ -959,7 +960,7 @@ class SimsonCard extends HTMLElement {
   }
 
   _onHACallStatus(event) {
-    const { call_id, status, direction, remote_node_id, target_user_id, caller_user_id, answered_by_user_id } = event;
+    const { call_id, status, direction, remote_node_id, call_type, sip_bridge_id, target_user_id, caller_user_id, answered_by_user_id } = event;
     // Only react to events that belong to this session's user.
     const myUserId = this._hass?.user?.id || "";
     const isMyEvent = call_id === this._currentCallId ||
@@ -979,6 +980,10 @@ class SimsonCard extends HTMLElement {
       }
       this._currentCallId = call_id;
       this._currentRemoteNode = remote_node_id;
+      if (sip_bridge_id) this._sipBridgeId = sip_bridge_id;
+      const isSipCall = call_type === "sip" ||
+        String(remote_node_id || "").startsWith("sip:") ||
+        String(remote_node_id || "").startsWith("asterisk:");
       // Caller creates the offer (impolite), callee waits for offer (polite).
       this._isCaller = direction === "outgoing";
       this._polite = !this._isCaller;
@@ -986,7 +991,15 @@ class SimsonCard extends HTMLElement {
       this._stopRingtone();
       this._removePopup();
       this._dismissBrowserNotification();
-      this._startWebRTC();
+      if (isSipCall) {
+        if (this._sipBridgeId) {
+          this._startSIPCall(this._sipBridgeId).catch(e => console.error("[Simson] SIP active start:", e));
+        } else {
+          console.warn("[Simson] Active SIP call missing sip_bridge_id", { call_id, remote_node_id });
+        }
+      } else {
+        this._startWebRTC();
+      }
       this._render();
     } else if (["ended","failed","missed","declined","timeout"].includes(status)) {
       this._stopRingtone();
@@ -1423,6 +1436,10 @@ class SimsonCard extends HTMLElement {
 
   // Start the SIP UA and dial into an Asterisk ConfBridge.
   async _startSIPCall(bridgeId) {
+    if (!bridgeId) return;
+    if (this._sipUA && this._sipUA._activeBridge === bridgeId) return;
+    this._cleanupSIPUA();
+
     const cfg = await this._fetchWebRTCConfig();
     const sip = cfg.sip || {};
     if (!sip.enabled || !sip.ws_url || !sip.username || !sip.password) {
@@ -1768,6 +1785,8 @@ class SimsonCard extends HTMLElement {
     const isTimeout = effectiveCallState === "timeout";
     const hasCall = !isIdle && !isMissed && !isDeclined && !isTimeout;
     const hasWebRTC = !!this._pc;
+    const activeCallType = this._activeCallAttr("call_type", "");
+    const activeSipBridgeId = this._activeCallAttr("sip_bridge_id", "");
 
     const remoteLabel = this._activeCallAttr("remote_label") ||
                         this._activeCallAttr("remote_node_id") ||
@@ -1798,10 +1817,25 @@ class SimsonCard extends HTMLElement {
         this._stopRingtone(); this._removePopup(); this._dismissBrowserNotification();
         this._currentCallId = callId;
         this._currentRemoteNode = this._activeCallAttr("remote_node_id", "");
+        if (activeSipBridgeId) this._sipBridgeId = activeSipBridgeId;
         this._isCaller = direction === "outgoing";
         this._polite = !this._isCaller;
-        if (!this._callStart) this._callStart = Date.now();
-        this._startWebRTC();
+        if (!this._callStart) {
+          const startedAt = Number(this._activeCallAttr("started_at", 0));
+          this._callStart = startedAt > 0 ? startedAt * 1000 : Date.now();
+        }
+        const isSipCall = activeCallType === "sip" ||
+          String(this._currentRemoteNode || "").startsWith("sip:") ||
+          String(this._currentRemoteNode || "").startsWith("asterisk:");
+        if (isSipCall) {
+          if (this._sipBridgeId) {
+            this._startSIPCall(this._sipBridgeId).catch(e => console.error("[Simson] SIP state active start:", e));
+          } else {
+            console.warn("[Simson] Active SIP state missing sip_bridge_id", { callId, remote: this._currentRemoteNode });
+          }
+        } else {
+          this._startWebRTC();
+        }
       } else if (effectiveCallState === "idle" && prev !== "idle") {
         this._stopRingtone(); this._removePopup(); this._dismissBrowserNotification();
         this._cleanupWebRTC();
