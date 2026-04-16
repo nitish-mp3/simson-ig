@@ -1,7 +1,8 @@
 /**
- * Simson Call Relay — Lovelace Card v4.5.4
+ * Simson Call Relay — Lovelace Card v4.5.5
  *
  * Full WebRTC voice calling between HA instances + Asterisk SIP phone support.
+ * v4.5.5: End active call state when SIP leg sends BYE/error so UI never stays stuck after remote hangup.
  * v4.5.4: Route SIP active calls through SIP UA bridge path and consume sip_bridge_id from status events.
  * v4.5.3: Fix input stability so node/SIP fields keep typed text across rerenders.
  * v4.5.2: Keep SIP manual dial compatible with local AMI and central VPS routing.
@@ -26,7 +27,7 @@
  *     - node_id: office2
  */
 
-const VERSION = "4.5.4";
+const VERSION = "4.5.5";
 
 // Default ICE servers (fallback when /api/webrtc-config is unavailable).
 const ICE_SERVERS = [
@@ -1434,6 +1435,12 @@ class SimsonCard extends HTMLElement {
     }
   }
 
+  _endActiveCallFromSip() {
+    const callId = this._activeCallAttr("call_id") || this._currentCallId;
+    if (!callId) return;
+    this._callService("hangup_call", { call_id: callId }).catch(() => {});
+  }
+
   // Start the SIP UA and dial into an Asterisk ConfBridge.
   async _startSIPCall(bridgeId) {
     if (!bridgeId) return;
@@ -1472,10 +1479,12 @@ class SimsonCard extends HTMLElement {
       onError: (e) => {
         console.error("Simson SIP UA error:", e);
         this._cleanupSIPUA();
+        this._endActiveCallFromSip();
         this._render();
       },
       onBye: () => {
         this._cleanupSIPUA();
+        this._endActiveCallFromSip();
         this._render();
       },
     });
