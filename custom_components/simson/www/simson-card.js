@@ -27,7 +27,7 @@
  *     - node_id: office2
  */
 
-const VERSION = "4.5.5";
+const VERSION = "4.5.6";
 
 // Default ICE servers (fallback when /api/webrtc-config is unavailable).
 const ICE_SERVERS = [
@@ -451,10 +451,10 @@ class MinimalSIPUA {
   _domain()    { return this._uri.split("@")[1]; }
   _user()      { return this._uri.split(":")[1]?.split("@")[0] || ""; }
 
-  _buildRequest(method, targetUri, callId, cseq, extraHeaders = "", body = "") {
+  _buildRequest(method, targetUri, callId, cseq, extraHeaders = "", body = "", toUri = null) {
     const via    = `SIP/2.0/WSS ${this._domain()};branch=z9hG4bK${this._rand()};rport`;
     const from   = `<${this._uri}>;tag=${this._tag}`;
-    const to     = `<${targetUri}>`;
+    const to     = `<${toUri || targetUri}>`;
     const ctLen  = body ? `Content-Type: application/sdp\r\nContent-Length: ${body.length}` : "Content-Length: 0";
     return `${method} ${targetUri} SIP/2.0\r\n` +
       `Via: ${via}\r\n` +
@@ -489,12 +489,12 @@ class MinimalSIPUA {
 
   _register() {
     this._send(this._buildRequest("REGISTER", "sip:" + this._domain(),
-      this._regCallId, this._cseq++, "Expires: 3600\r\n"));
+      this._regCallId, this._cseq++, "Expires: 3600\r\n", "", this._uri));
   }
 
   _sendUnregister() {
     this._send(this._buildRequest("REGISTER", "sip:" + this._domain(),
-      this._regCallId, this._cseq++, "Expires: 0\r\n"));
+      this._regCallId, this._cseq++, "Expires: 0\r\n", "", this._uri));
   }
 
   // ── Message parsing ───────────────────────────────────────────
@@ -648,10 +648,13 @@ class MinimalSIPUA {
     const authLine = (code === 401 ? "Authorization" : "Proxy-Authorization") + ": " + aHdr;
     if (method === "REGISTER") {
       this._send(this._buildRequest("REGISTER", "sip:" + this._domain(), this._regCallId,
-        this._cseq++, "Expires: 3600\r\n" + authLine + "\r\n"));
+        this._cseq++, "Expires: 3600\r\n" + authLine + "\r\n", "", this._uri));
     } else if (method === "INVITE") {
-      // Re-INVITE with auth — need to regenerate offer
-      this.dial(this._activeBridge).catch(() => {});
+      // Re-send INVITE with auth — reuse existing PeerConnection and SDP
+      const sdp = this._pc?.localDescription?.sdp || "";
+      const target = "sip:" + (this._activeBridge || "") + "@" + this._domain();
+      this._send(this._buildRequest("INVITE", target, this._callId, this._cseq++,
+        authLine + "\r\n", sdp));
     }
   }
 

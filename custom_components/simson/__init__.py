@@ -13,8 +13,10 @@ from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
-from homeassistant.components.http import StaticPathConfig
+from homeassistant.components.http import HomeAssistantView, StaticPathConfig
 from homeassistant.components.frontend import add_extra_js_url
+
+from aiohttp import web
 
 from .api import SimsonApiClient
 from .const import (
@@ -36,7 +38,7 @@ logger = logging.getLogger(__name__)
 
 SCAN_INTERVAL = timedelta(seconds=5)
 _CARD_JS_PATH = "/simson/www/simson-card.js"
-_CARD_URL = f"{_CARD_JS_PATH}?v=4.5.5"  # bump this whenever the card JS changes
+_CARD_URL = f"{_CARD_JS_PATH}?v=4.5.6"  # bump this whenever the card JS changes
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -79,6 +81,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
         # Register services.
         _register_services(hass, client)
+
+        # Expose /api/webrtc-config so the Lovelace card can fetch SIP credentials.
+        hass.http.register_view(WebRTCConfigView(client))
 
     except Exception:
         await client.close()
@@ -125,6 +130,27 @@ class SimsonCoordinator(DataUpdateCoordinator):
             return {**status, "calls_data": calls}
         except Exception as err:
             raise UpdateFailed(f"Error fetching Simson status: {err}") from err
+
+
+class WebRTCConfigView(HomeAssistantView):
+    """Proxy /api/webrtc-config to the Simson addon so the Lovelace card can fetch SIP creds."""
+
+    url = "/api/webrtc-config"
+    name = "api:webrtc-config"
+    requires_auth = True
+
+    def __init__(self, client: SimsonApiClient) -> None:
+        self._client = client
+
+    async def get(self, request: web.Request) -> web.Response:
+        try:
+            data = await self._client.webrtc_config()
+            return web.json_response(data)
+        except Exception as err:
+            logger.error("Failed to proxy webrtc-config: %s", err)
+            return web.json_response(
+                {"ice_servers": [], "sip": {"enabled": False}}, status=502
+            )
 
 
 def _register_services(hass: HomeAssistant, client: SimsonApiClient) -> None:

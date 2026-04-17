@@ -108,5 +108,8 @@ class SimsonApiClient:
     async def get_remote_users(self, node_id: str) -> dict:
         return await self._post("/api/remote-users", {"node_id": node_id})
 
+    async def webrtc_config(self) -> dict:
+        return await self._get("/api/webrtc-config")
+
     async def get_call_history(self, limit: int = 50) -> dict:
         return await self._get(f"/api/history?limit={limit}")
