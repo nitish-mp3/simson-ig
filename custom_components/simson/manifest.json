@@ -6,7 +6,7 @@
   "documentation": "https://github.com/nitish-mp3/simson-ig",
   "integration_type": "service",
   "iot_class": "local_polling",
-  "version": "2.8.5",
+  "version": "2.9.0",
   "requirements": [],
   "dependencies": ["frontend", "http"]
 }
