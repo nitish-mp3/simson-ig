@@ -1,7 +1,10 @@
 /**
- * Simson Call Relay — Lovelace Card v4.5.5
+ * Simson Call Relay — Lovelace Card v4.5.7
  *
  * Full WebRTC voice calling between HA instances + Asterisk SIP phone support.
+ * v4.5.7: Decline immediately clears local state (no server wait); 8s incoming suppression after
+ *         Decline to stop flood re-popup from SIP phone spam dialling external numbers.
+ * v4.5.6: Fix MinimalSIPUA REGISTER To: header, INVITE auth retry, /api/webrtc-config HA view.
  * v4.5.5: End active call state when SIP leg sends BYE/error so UI never stays stuck after remote hangup.
  * v4.5.4: Route SIP active calls through SIP UA bridge path and consume sip_bridge_id from status events.
  * v4.5.3: Fix input stability so node/SIP fields keep typed text across rerenders.
@@ -27,7 +30,7 @@
  *     - node_id: office2
  */
 
-const VERSION = "4.5.6";
+const VERSION = "4.5.7";
 
 // Default ICE servers (fallback when /api/webrtc-config is unavailable).
 const ICE_SERVERS = [
@@ -1027,6 +1030,11 @@ class SimsonCard extends HTMLElement {
       this._ignoredCallId = call_id;
       return;
     }
+    // Suppress rapid-fire re-invites after the user hit Decline.
+    if (this._incomingSuppressUntil && Date.now() < this._incomingSuppressUntil) {
+      this._ignoredCallId = call_id;
+      return;
+    }
     this._currentCallId = call_id;
     this._currentRemoteNode = from_node_id;
     this._incomingFrom = from_label || from_node_id;
@@ -1138,6 +1146,8 @@ class SimsonCard extends HTMLElement {
     this._dismissBrowserNotification();
     this._callStart = Date.now();
     this._answeredByMe = true;
+    // Cancel any incoming suppression so the call can proceed normally
+    this._incomingSuppressUntil = 0;
     this._callService("answer_call", {
       call_id: callId,
       answered_by_user_id: this._hass?.user?.id || "",
@@ -1150,10 +1160,25 @@ class SimsonCard extends HTMLElement {
 
   _reject() {
     const callId = this._activeCallAttr("call_id") || this._currentCallId;
+    // Fire-and-forget — don't wait for server. If the call already timed out,
+    // this will fail silently, but the UI clears immediately regardless.
+    this._callService("reject_call", { call_id: callId, reason: "declined" }).catch(() => {});
+    // Clear all local call state right now, before the server responds.
     this._stopRingtone();
     this._removePopup();
     this._dismissBrowserNotification();
-    this._callService("reject_call", { call_id: callId, reason: "declined" });
+    this._ignoredCallId = callId;
+    this._currentCallId = null;
+    this._currentRemoteNode = null;
+    this._sipBridgeId = null;
+    this._isCaller = false;
+    this._callStart = null;
+    this._answeredByMe = false;
+    this._prevCallState = "idle"; // reset transition tracking
+    // Suppress any new incoming call popup for 8 s so the phone spam
+    // doesn't immediately re-open the popup after the user dismisses it.
+    this._incomingSuppressUntil = Date.now() + 8000;
+    this._render();
   }
 
   _hangup() {
@@ -1814,7 +1839,14 @@ class SimsonCard extends HTMLElement {
     if (prev !== effectiveCallState) {
       this._prevCallState = effectiveCallState;
       if (effectiveCallState === "incoming" && prev === "idle") {
-        if (!(this._ignoredCallId && this._ignoredCallId === callId)) {
+        // Respect the post-decline suppression window (e.g. after user hits Decline
+        // on a spam call, we ignore new incoming events for 8 s).
+        const suppressed = this._incomingSuppressUntil && Date.now() < this._incomingSuppressUntil;
+        if (suppressed) {
+          this._ignoredCallId = callId;
+          // Revert prev so a real call after the window still triggers
+          this._prevCallState = "idle";
+        } else if (!(this._ignoredCallId && this._ignoredCallId === callId)) {
           this._currentCallId = callId;
           this._currentRemoteNode = this._activeCallAttr("remote_node_id", "");
           this._isCaller = false;
