@@ -1,7 +1,8 @@
 /**
- * Simson Call Relay — Lovelace Card v4.5.9
+ * Simson Call Relay — Lovelace Card v4.5.10
  *
  * Full WebRTC voice calling between HA instances + Asterisk SIP phone support.
+ * v4.5.10: Fix double SIP UA race: _pendingSIPBridgeId guard prevents second _startSIPCall from killing first.
  * v4.5.9: Fix SIP Digest auth: support qop=auth (nc+cnonce) and echo opaque, as required by Asterisk 16.
  * v4.5.8: Full SIP flow debug logging; fix silent REGISTER error handling in MinimalSIPUA.
  * v4.5.7: Decline immediately clears local state (no server wait); 8s incoming suppression after
@@ -32,7 +33,7 @@
  *     - node_id: office2
  */
 
-const VERSION = "4.5.9";
+const VERSION = "4.5.10";
 
 // Default ICE servers (fallback when /api/webrtc-config is unavailable).
 const ICE_SERVERS = [
@@ -1487,6 +1488,7 @@ class SimsonCard extends HTMLElement {
       try { this._sipUA.disconnect(); } catch (e) { /* ignore */ }
       this._sipUA = null;
     }
+    this._pendingSIPBridgeId = null;
   }
 
   _endActiveCallFromSip() {
@@ -1499,8 +1501,14 @@ class SimsonCard extends HTMLElement {
   async _startSIPCall(bridgeId) {
     console.log("[Simson SIP] _startSIPCall:", bridgeId);
     if (!bridgeId) { console.warn("[Simson SIP] no bridgeId — abort"); return; }
-    if (this._sipUA && this._sipUA._activeBridge === bridgeId) { console.log("[Simson SIP] already in bridge", bridgeId); return; }
-    this._cleanupSIPUA();
+    // Guard against double-start: set pending flag BEFORE the async gap so a second
+    // call (from set hass() sensor update racing with the HA event) exits early.
+    if (this._pendingSIPBridgeId === bridgeId || (this._sipUA && this._sipUA._activeBridge === bridgeId)) {
+      console.log("[Simson SIP] already connecting/in bridge", bridgeId); return;
+    }
+    this._pendingSIPBridgeId = bridgeId;
+    // Tear down any previous UA but preserve our pending flag.
+    if (this._sipUA) { try { this._sipUA.disconnect(); } catch (e) {} this._sipUA = null; }
 
     const cfg = await this._fetchWebRTCConfig();
     const sip = cfg.sip || {};
