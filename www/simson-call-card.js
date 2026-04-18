@@ -35,7 +35,7 @@
  *     - node_id: office2
  */
 
-const VERSION = "4.6.0";
+const VERSION = "4.7.0";
 
 // Default ICE servers (fallback when /api/webrtc-config is unavailable).
 const ICE_SERVERS = [
@@ -394,6 +394,8 @@ class MinimalSIPUA {
     this._activeCallCseq = null;
     this._activeCallToTag = null;
     this._regInterval = null;
+    this._inviteCSeq = null;   // CSeq number of the last INVITE (for ACK)
+    this._lastAck = null;      // cached ACK for 200 OK retransmissions
   }
 
   // ── Public API ────────────────────────────────────────────────
@@ -440,7 +442,9 @@ class MinimalSIPUA {
     await this._waitICE();
 
     this._callId = this._rand(16) + "@" + this._domain();
+    this._lastAck = null;
     const target = "sip:" + extension + "@" + this._domain();
+    this._inviteCSeq = this._cseq;
     this._send(this._buildRequest("INVITE", target, this._callId, this._cseq++, "",
       this._pc.localDescription.sdp));
   }
@@ -556,8 +560,8 @@ class MinimalSIPUA {
       if (code >= 100 && code < 200) return; // provisional
       if (code === 200) this._handleInvite200OK(raw);
       else if (code === 401 || code === 407) {
-        this._handleDigestChallenge(code, raw, "INVITE",
-          "sip:" + (this._activeBridge || this._domain()), this._callId);
+        const digestUri = "sip:" + (this._activeBridge ? this._activeBridge + "@" + this._domain() : this._domain());
+        this._handleDigestChallenge(code, raw, "INVITE", digestUri, this._callId);
       } else if (code >= 300) {
         // INVITE failed — clean up
         this._cleanup();
@@ -576,12 +580,26 @@ class MinimalSIPUA {
 
   async _handleInvite200OK(raw) {
     if (!this._pc) return;
+
+    // ── 200 OK retransmission: just re-send the cached ACK ──────────────
+    if (this._lastAck) {
+      console.log("[Simson SIPua] 200 OK retransmission — re-sending ACK");
+      this._send(this._lastAck);
+      return;
+    }
+
     const sdp = this._body(raw);
     if (!sdp) return;
     try {
       await this._pc.setRemoteDescription({ type: "answer", sdp });
-    } catch(e) { return; }
-    // ACK
+    } catch(e) {
+      console.error("[Simson SIPua] setRemoteDescription failed:", e);
+      return;
+    }
+
+    // ── Build ACK — CSeq MUST match the INVITE per RFC 3261 §13.2.2.4 ──
+    const cseqHdr   = this._hdr(raw, "CSeq") || "";
+    const ackCSeq   = parseInt(cseqHdr) || this._inviteCSeq || 1;
     const toHdr     = this._hdr(raw, "To") || "";
     const fromHdr   = this._hdr(raw, "From") || "";
     const callId    = this._hdr(raw, "Call-ID") || this._callId;
@@ -591,7 +609,9 @@ class MinimalSIPUA {
     const ack = `ACK ${ackUri} SIP/2.0\r\n` +
       `Via: ${via}\r\nMax-Forwards: 70\r\n` +
       `From: ${fromHdr}\r\nTo: ${toHdr}\r\n` +
-      `Call-ID: ${callId}\r\nCSeq: ${this._cseq++} ACK\r\nContent-Length: 0\r\n\r\n`;
+      `Call-ID: ${callId}\r\nCSeq: ${ackCSeq} ACK\r\nContent-Length: 0\r\n\r\n`;
+    this._lastAck = ack;
+    console.log("[Simson SIPua] sending ACK with CSeq", ackCSeq);
     this._send(ack);
   }
 
@@ -687,6 +707,7 @@ class MinimalSIPUA {
       // Re-send INVITE with auth — reuse existing PeerConnection and SDP
       const sdp = this._pc?.localDescription?.sdp || "";
       const target = "sip:" + (this._activeBridge || "") + "@" + this._domain();
+      this._inviteCSeq = this._cseq;  // track for ACK
       this._send(this._buildRequest("INVITE", target, this._callId, this._cseq++,
         authLine + "\r\n", sdp));
     }
@@ -709,6 +730,8 @@ class MinimalSIPUA {
     if (this._regInterval) { clearInterval(this._regInterval); this._regInterval = null; }
     if (this._pc) { this._pc.close(); this._pc = null; }
     if (this._localStream) { this._localStream.getTracks().forEach(t => t.stop()); this._localStream = null; }
+    this._lastAck = null;
+    this._inviteCSeq = null;
   }
 
   // ── MD5 (RFC 1321) — required for SIP Digest authentication ──
