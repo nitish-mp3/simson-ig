@@ -1,7 +1,9 @@
 /**
- * Simson Call Relay — Lovelace Card v4.5.10
+ * Simson Call Relay — Lovelace Card v4.6.0
  *
  * Full WebRTC voice calling between HA instances + Asterisk SIP phone support.
+ * v4.6.0: CRITICAL FIX: SIP message framing — extraHeaders double CRLF placed Content-Length in body,
+ *         Via transport WS (not WSS) for Caddy-proxied WebSocket, REGISTER keepalive every 5min.
  * v4.5.10: Fix double SIP UA race: _pendingSIPBridgeId guard prevents second _startSIPCall from killing first.
  * v4.5.9: Fix SIP Digest auth: support qop=auth (nc+cnonce) and echo opaque, as required by Asterisk 16.
  * v4.5.8: Full SIP flow debug logging; fix silent REGISTER error handling in MinimalSIPUA.
@@ -33,7 +35,7 @@
  *     - node_id: office2
  */
 
-const VERSION = "4.5.10";
+const VERSION = "4.6.0";
 
 // Default ICE servers (fallback when /api/webrtc-config is unavailable).
 const ICE_SERVERS = [
@@ -391,6 +393,7 @@ class MinimalSIPUA {
     this._activeCallVia = null;
     this._activeCallCseq = null;
     this._activeCallToTag = null;
+    this._regInterval = null;
   }
 
   // ── Public API ────────────────────────────────────────────────
@@ -407,7 +410,7 @@ class MinimalSIPUA {
     this._ws.onopen  = () => { console.log("[Simson SIPua] WS open — sending REGISTER"); this._register(); };
     this._ws.onmessage = (e) => { console.log("[Simson SIPua] RX:", e.data.slice(0, 200)); this._handleRaw(e.data); };
     this._ws.onerror = (ev) => { console.error("[Simson SIPua] WS error", ev); this._onError && this._onError(new Error("SIP WebSocket error")); };
-    this._ws.onclose = (ev) => { console.log("[Simson SIPua] WS close", ev.code, ev.reason); this._registered = false; };
+    this._ws.onclose = (ev) => { console.log("[Simson SIPua] WS close", ev.code, ev.reason); this._registered = false; if (this._regInterval) { clearInterval(this._regInterval); this._regInterval = null; } };
   }
 
   disconnect() {
@@ -460,7 +463,7 @@ class MinimalSIPUA {
   _user()      { return this._uri.split(":")[1]?.split("@")[0] || ""; }
 
   _buildRequest(method, targetUri, callId, cseq, extraHeaders = "", body = "", toUri = null) {
-    const via    = `SIP/2.0/WSS ${this._domain()};branch=z9hG4bK${this._rand()};rport`;
+    const via    = `SIP/2.0/WS ${this._domain()};branch=z9hG4bK${this._rand()};rport`;
     const from   = `<${this._uri}>;tag=${this._tag}`;
     const to     = `<${toUri || targetUri}>`;
     const ctLen  = body ? `Content-Type: application/sdp\r\nContent-Length: ${body.length}` : "Content-Length: 0";
@@ -473,7 +476,7 @@ class MinimalSIPUA {
       `CSeq: ${cseq} ${method}\r\n` +
       `Contact: <${this._uri};transport=ws>\r\n` +
       `User-Agent: Simson/${VERSION}\r\n` +
-      (extraHeaders ? extraHeaders + "\r\n" : "") +
+      (extraHeaders || "") +
       `${ctLen}\r\n\r\n${body}`;
   }
 
@@ -539,6 +542,8 @@ class MinimalSIPUA {
       if (code === 200) {
         console.log("[Simson SIPua] REGISTER 200 OK — registered");
         this._registered = true;
+        if (this._regInterval) clearInterval(this._regInterval);
+        this._regInterval = setInterval(() => { if (this._registered) this._register(); }, 300000);
         this._onRegistered && this._onRegistered();
       } else if (code === 401 || code === 407) {
         console.log("[Simson SIPua] REGISTER", code, "— retrying with Digest auth");
@@ -582,7 +587,7 @@ class MinimalSIPUA {
     const callId    = this._hdr(raw, "Call-ID") || this._callId;
     const contactHdr = this._hdr(raw, "Contact") || "";
     const ackUri    = contactHdr.match(/<([^>]+)>/)?.[1] || "sip:" + this._domain();
-    const via       = `SIP/2.0/WSS ${this._domain()};branch=z9hG4bK${this._rand()};rport`;
+    const via       = `SIP/2.0/WS ${this._domain()};branch=z9hG4bK${this._rand()};rport`;
     const ack = `ACK ${ackUri} SIP/2.0\r\n` +
       `Via: ${via}\r\nMax-Forwards: 70\r\n` +
       `From: ${fromHdr}\r\nTo: ${toHdr}\r\n` +
@@ -701,6 +706,7 @@ class MinimalSIPUA {
   // ── Cleanup ───────────────────────────────────────────────────
 
   _cleanup() {
+    if (this._regInterval) { clearInterval(this._regInterval); this._regInterval = null; }
     if (this._pc) { this._pc.close(); this._pc = null; }
     if (this._localStream) { this._localStream.getTracks().forEach(t => t.stop()); this._localStream = null; }
   }
