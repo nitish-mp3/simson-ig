@@ -1,7 +1,8 @@
 /**
- * Simson Call Relay — Lovelace Card v4.5.8
+ * Simson Call Relay — Lovelace Card v4.5.9
  *
  * Full WebRTC voice calling between HA instances + Asterisk SIP phone support.
+ * v4.5.9: Fix SIP Digest auth: support qop=auth (nc+cnonce) and echo opaque, as required by Asterisk 16.
  * v4.5.8: Full SIP flow debug logging; fix silent REGISTER error handling in MinimalSIPUA.
  * v4.5.7: Decline immediately clears local state (no server wait); 8s incoming suppression after
  *         Decline to stop flood re-popup from SIP phone spam dialling external numbers.
@@ -31,7 +32,7 @@
  *     - node_id: office2
  */
 
-const VERSION = "4.5.8";
+const VERSION = "4.5.9";
 
 // Default ICE servers (fallback when /api/webrtc-config is unavailable).
 const ICE_SERVERS = [
@@ -650,13 +651,26 @@ class MinimalSIPUA {
   _handleDigestChallenge(code, raw, method, uri, callId) {
     const hdrName = code === 401 ? "WWW-Authenticate" : "Proxy-Authenticate";
     const auth = this._hdr(raw, hdrName) || "";
-    const realm = auth.match(/realm="([^"]+)"/)?.[1] || this._domain();
-    const nonce = auth.match(/nonce="([^"]+)"/)?.[1] || "";
+    const realm  = auth.match(/realm="([^"]+)"/)?.[1]  || this._domain();
+    const nonce  = auth.match(/nonce="([^"]+)"/)?.[1]  || "";
+    const opaque = auth.match(/opaque="([^"]+)"/)?.[1] || "";
+    const qop    = auth.match(/qop="([^"]+)"/)?.[1]    || "";
     const ha1 = this._md5(this._user() + ":" + realm + ":" + this._password);
     const ha2 = this._md5(method + ":" + uri);
-    const resp = this._md5(ha1 + ":" + nonce + ":" + ha2);
-    const aHdr = `Digest username="${this._user()}",realm="${realm}",nonce="${nonce}",` +
-      `uri="${uri}",response="${resp}",algorithm=MD5`;
+    let resp, aHdr;
+    if (qop && qop.split(",").map(q => q.trim()).includes("auth")) {
+      // RFC 2617 §3.2.2 qop=auth — Asterisk requires this form
+      const nc     = "00000001";
+      const cnonce = this._rand(8);
+      resp = this._md5(ha1 + ":" + nonce + ":" + nc + ":" + cnonce + ":auth:" + ha2);
+      aHdr = `Digest username="${this._user()}",realm="${realm}",nonce="${nonce}",` +
+        `uri="${uri}",response="${resp}",algorithm=MD5,qop=auth,nc=${nc},cnonce="${cnonce}"`;
+    } else {
+      resp = this._md5(ha1 + ":" + nonce + ":" + ha2);
+      aHdr = `Digest username="${this._user()}",realm="${realm}",nonce="${nonce}",` +
+        `uri="${uri}",response="${resp}",algorithm=MD5`;
+    }
+    if (opaque) aHdr += `,opaque="${opaque}"`;
     const authLine = (code === 401 ? "Authorization" : "Proxy-Authorization") + ": " + aHdr;
     if (method === "REGISTER") {
       this._send(this._buildRequest("REGISTER", "sip:" + this._domain(), this._regCallId,
