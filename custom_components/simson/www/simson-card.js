@@ -1,7 +1,8 @@
 /**
- * Simson Call Relay — Lovelace Card v4.5.7
+ * Simson Call Relay — Lovelace Card v4.5.8
  *
  * Full WebRTC voice calling between HA instances + Asterisk SIP phone support.
+ * v4.5.8: Full SIP flow debug logging; fix silent REGISTER error handling in MinimalSIPUA.
  * v4.5.7: Decline immediately clears local state (no server wait); 8s incoming suppression after
  *         Decline to stop flood re-popup from SIP phone spam dialling external numbers.
  * v4.5.6: Fix MinimalSIPUA REGISTER To: header, INVITE auth retry, /api/webrtc-config HA view.
@@ -30,7 +31,7 @@
  *     - node_id: office2
  */
 
-const VERSION = "4.5.7";
+const VERSION = "4.5.8";
 
 // Default ICE servers (fallback when /api/webrtc-config is unavailable).
 const ICE_SERVERS = [
@@ -393,16 +394,18 @@ class MinimalSIPUA {
   // ── Public API ────────────────────────────────────────────────
 
   connect() {
+    console.log("[Simson SIPua] connect →", this._wsUrl);
     try {
       this._ws = new WebSocket(this._wsUrl, "sip");
     } catch (e) {
+      console.error("[Simson SIPua] WebSocket() threw:", e.message);
       this._onError && this._onError(new Error("SIP WS connection failed: " + e.message));
       return;
     }
-    this._ws.onopen  = () => this._register();
-    this._ws.onmessage = (e) => this._handleRaw(e.data);
-    this._ws.onerror = () => this._onError && this._onError(new Error("SIP WebSocket error"));
-    this._ws.onclose = () => { this._registered = false; };
+    this._ws.onopen  = () => { console.log("[Simson SIPua] WS open — sending REGISTER"); this._register(); };
+    this._ws.onmessage = (e) => { console.log("[Simson SIPua] RX:", e.data.slice(0, 200)); this._handleRaw(e.data); };
+    this._ws.onerror = (ev) => { console.error("[Simson SIPua] WS error", ev); this._onError && this._onError(new Error("SIP WebSocket error")); };
+    this._ws.onclose = (ev) => { console.log("[Simson SIPua] WS close", ev.code, ev.reason); this._registered = false; };
   }
 
   disconnect() {
@@ -491,6 +494,7 @@ class MinimalSIPUA {
   // ── REGISTER ──────────────────────────────────────────────────
 
   _register() {
+    console.log("[Simson SIPua] → REGISTER", this._uri);
     this._send(this._buildRequest("REGISTER", "sip:" + this._domain(),
       this._regCallId, this._cseq++, "Expires: 3600\r\n", "", this._uri));
   }
@@ -531,10 +535,15 @@ class MinimalSIPUA {
   _handleResponse(code, method, raw) {
     if (method === "REGISTER") {
       if (code === 200) {
+        console.log("[Simson SIPua] REGISTER 200 OK — registered");
         this._registered = true;
         this._onRegistered && this._onRegistered();
       } else if (code === 401 || code === 407) {
+        console.log("[Simson SIPua] REGISTER", code, "— retrying with Digest auth");
         this._handleDigestChallenge(code, raw, "REGISTER", "sip:" + this._domain(), this._regCallId);
+      } else {
+        console.error("[Simson SIPua] REGISTER rejected:", code);
+        this._onError && this._onError(new Error("SIP REGISTER rejected: " + code));
       }
     } else if (method === "INVITE") {
       if (code >= 100 && code < 200) return; // provisional
@@ -975,6 +984,7 @@ class SimsonCard extends HTMLElement {
       (direction === "outgoing" && (!caller_user_id || caller_user_id === myUserId));
     if (!isMyEvent) return;
     if (status === "active") {
+      console.log("[Simson] call_status active", { call_id, call_type, sip_bridge_id, direction, remote_node_id });
       // If another user on this node answered (call-all), dismiss for me.
       if (direction === "incoming" && answered_by_user_id && answered_by_user_id !== myUserId) {
         this._stopRingtone();
@@ -1471,14 +1481,16 @@ class SimsonCard extends HTMLElement {
 
   // Start the SIP UA and dial into an Asterisk ConfBridge.
   async _startSIPCall(bridgeId) {
-    if (!bridgeId) return;
-    if (this._sipUA && this._sipUA._activeBridge === bridgeId) return;
+    console.log("[Simson SIP] _startSIPCall:", bridgeId);
+    if (!bridgeId) { console.warn("[Simson SIP] no bridgeId — abort"); return; }
+    if (this._sipUA && this._sipUA._activeBridge === bridgeId) { console.log("[Simson SIP] already in bridge", bridgeId); return; }
     this._cleanupSIPUA();
 
     const cfg = await this._fetchWebRTCConfig();
     const sip = cfg.sip || {};
+    console.log("[Simson SIP] webrtc-config sip:", JSON.stringify({enabled: sip.enabled, ws_url: sip.ws_url, username: sip.username, domain: sip.domain}));
     if (!sip.enabled || !sip.ws_url || !sip.username || !sip.password) {
-      console.warn("Simson: SIP config missing — cannot join Asterisk bridge");
+      console.warn("[Simson SIP] SIP config missing/disabled — cannot join Asterisk bridge", sip);
       return;
     }
     const uri = "sip:" + sip.username + "@" + sip.domain;
