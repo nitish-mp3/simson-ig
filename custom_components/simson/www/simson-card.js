@@ -672,6 +672,8 @@ class MinimalSIPUA {
     }
     if (opaque) aHdr += `,opaque="${opaque}"`;
     const authLine = (code === 401 ? "Authorization" : "Proxy-Authorization") + ": " + aHdr;
+    console.log("[Simson SIPua] Digest auth →", authLine);
+    console.log("[Simson SIPua] Digest debug: realm=", realm, "nonce=", nonce, "qop=", qop, "opaque=", opaque, "ha1=", ha1, "ha2=", ha2, "resp=", resp);
     if (method === "REGISTER") {
       this._send(this._buildRequest("REGISTER", "sip:" + this._domain(), this._regCallId,
         this._cseq++, "Expires: 3600\r\n" + authLine + "\r\n", "", this._uri));
