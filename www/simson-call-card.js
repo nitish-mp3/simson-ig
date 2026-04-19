@@ -35,7 +35,7 @@
  *     - node_id: office2
  */
 
-const VERSION = "4.7.0";
+const VERSION = "4.7.1";
 
 // Default ICE servers (fallback when /api/webrtc-config is unavailable).
 const ICE_SERVERS = [
@@ -410,7 +410,7 @@ class MinimalSIPUA {
       return;
     }
     this._ws.onopen  = () => { console.log("[Simson SIPua] WS open — sending REGISTER"); this._register(); };
-    this._ws.onmessage = (e) => { console.log("[Simson SIPua] RX:", e.data.slice(0, 200)); this._handleRaw(e.data); };
+    this._ws.onmessage = (e) => { if (!e.data || !e.data.trim()) { console.log("[Simson SIPua] RX: (empty frame — ignored)"); return; } console.log("[Simson SIPua] RX:", e.data.slice(0, 200)); this._handleRaw(e.data); };
     this._ws.onerror = (ev) => { console.error("[Simson SIPua] WS error", ev); this._onError && this._onError(new Error("SIP WebSocket error")); };
     this._ws.onclose = (ev) => { console.log("[Simson SIPua] WS close", ev.code, ev.reason); this._registered = false; if (this._regInterval) { clearInterval(this._regInterval); this._regInterval = null; } };
   }
@@ -434,7 +434,14 @@ class MinimalSIPUA {
       return;
     }
     this._pc = new RTCPeerConnection({ iceServers: this._iceServers });
-    this._pc.ontrack = (ev) => this._onAudioTrack && this._onAudioTrack(ev.streams?.[0] || null, ev.track);
+    this._pc.ontrack = (ev) => {
+      console.log("[Simson SIPua] ontrack fired — kind:", ev.track.kind, "readyState:", ev.track.readyState);
+      this._onAudioTrack && this._onAudioTrack(ev.streams?.[0] || null, ev.track);
+    };
+    this._pc.oniceconnectionstatechange = () => console.log("[Simson SIPua] ICE state:", this._pc?.iceConnectionState);
+    this._pc.onconnectionstatechange = () => console.log("[Simson SIPua] Connection state:", this._pc?.connectionState);
+    this._pc.onicegatheringstatechange = () => console.log("[Simson SIPua] ICE gathering:", this._pc?.iceGatheringState);
+    this._pc.onicecandidate = (ev) => { if (ev.candidate) console.log("[Simson SIPua] ICE candidate:", ev.candidate.candidate.slice(0, 80)); };
     for (const t of this._localStream.getAudioTracks()) this._pc.addTrack(t, this._localStream);
 
     const offer = await this._pc.createOffer();
@@ -590,6 +597,10 @@ class MinimalSIPUA {
 
     const sdp = this._body(raw);
     if (!sdp) return;
+    // Log the media IP from the SDP answer
+    const cLine = sdp.match(/c=IN IP4 ([^\r\n]+)/);
+    console.log("[Simson SIPua] SDP answer c-line:", cLine ? cLine[1] : "MISSING");
+    console.log("[Simson SIPua] SDP answer (first 500 chars):", sdp.slice(0, 500));
     try {
       await this._pc.setRemoteDescription({ type: "answer", sdp });
     } catch(e) {
