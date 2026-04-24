@@ -1,7 +1,11 @@
 /**
- * Simson Call Relay — Lovelace Card v4.6.0
+ * Simson Call Relay — Lovelace Card v4.7.2
  *
  * Full WebRTC voice calling between HA instances + Asterisk SIP phone support.
+ * v4.7.2: FIX: Phantom incoming call UI spam — added 30s timeout to auto-clear incoming call state
+ *         if no answer/reject received. Clears timeout on answer, reject, call active, or call end.
+ * v4.7.1: WebRTC state logging (ICE, connection, SDP answer), empty WS frame filtering.
+ * v4.7.0: ACK CSeq fix (RFC 3261 §13.2.2.4), 200 OK retransmission handling, AOR config fix.
  * v4.6.0: CRITICAL FIX: SIP message framing — extraHeaders double CRLF placed Content-Length in body,
  *         Via transport WS (not WSS) for Caddy-proxied WebSocket, REGISTER keepalive every 5min.
  * v4.5.10: Fix double SIP UA race: _pendingSIPBridgeId guard prevents second _startSIPCall from killing first.
@@ -35,7 +39,7 @@
  *     - node_id: office2
  */
 
-const VERSION = "4.7.1";
+const VERSION = "4.7.2";
 
 // Default ICE servers (fallback when /api/webrtc-config is unavailable).
 const ICE_SERVERS = [
@@ -867,6 +871,7 @@ class SimsonCard extends HTMLElement {
     this._makingOffer = false;
     this._pendingCandidates = [];
     this._answeredByMe = false;   // track if this user answered the call
+    this._incomingCallTimeout = null;  // timeout to clear phantom incoming calls
 
     // Ringtone
     this._ringCtx = null;
@@ -1042,6 +1047,11 @@ class SimsonCard extends HTMLElement {
     if (!isMyEvent) return;
     if (status === "active") {
       console.log("[Simson] call_status active", { call_id, call_type, sip_bridge_id, direction, remote_node_id });
+      // Clear incoming timeout since call is now active.
+      if (this._incomingCallTimeout) {
+        clearTimeout(this._incomingCallTimeout);
+        this._incomingCallTimeout = null;
+      }
       // If another user on this node answered (call-all), dismiss for me.
       if (direction === "incoming" && answered_by_user_id && answered_by_user_id !== myUserId) {
         this._stopRingtone();
@@ -1076,6 +1086,11 @@ class SimsonCard extends HTMLElement {
       }
       this._render();
     } else if (["ended","failed","missed","declined","timeout"].includes(status)) {
+      // Clear incoming timeout since call has ended.
+      if (this._incomingCallTimeout) {
+        clearTimeout(this._incomingCallTimeout);
+        this._incomingCallTimeout = null;
+      }
       this._stopRingtone();
       this._removePopup();
       this._dismissBrowserNotification();
@@ -1102,6 +1117,11 @@ class SimsonCard extends HTMLElement {
       this._ignoredCallId = call_id;
       return;
     }
+    // Clear any existing incoming timeout to prevent race conditions.
+    if (this._incomingCallTimeout) {
+      clearTimeout(this._incomingCallTimeout);
+      this._incomingCallTimeout = null;
+    }
     this._currentCallId = call_id;
     this._currentRemoteNode = from_node_id;
     this._incomingFrom = from_label || from_node_id;
@@ -1111,6 +1131,20 @@ class SimsonCard extends HTMLElement {
     this._playRingtone();
     this._showIncomingPopup();
     this._showBrowserNotification(this._incomingFrom, this._incomingCallType);
+    // Auto-clear phantom incoming calls after 30 seconds if no answer/reject.
+    this._incomingCallTimeout = setTimeout(() => {
+      if (this._currentCallId === call_id) {
+        console.log("[Simson] Incoming call timeout - clearing phantom call", call_id);
+        this._stopRingtone();
+        this._removePopup();
+        this._dismissBrowserNotification();
+        this._currentCallId = null;
+        this._currentRemoteNode = null;
+        this._sipBridgeId = null;
+        this._incomingCallTimeout = null;
+        this._render();
+      }
+    }, 30000);
     this._render();
   }
 
@@ -1208,6 +1242,11 @@ class SimsonCard extends HTMLElement {
 
   _answer() {
     const callId = this._activeCallAttr("call_id") || this._currentCallId;
+    // Clear incoming timeout since call is being answered.
+    if (this._incomingCallTimeout) {
+      clearTimeout(this._incomingCallTimeout);
+      this._incomingCallTimeout = null;
+    }
     this._stopRingtone();
     this._removePopup();
     this._dismissBrowserNotification();
@@ -1227,6 +1266,11 @@ class SimsonCard extends HTMLElement {
 
   _reject() {
     const callId = this._activeCallAttr("call_id") || this._currentCallId;
+    // Clear incoming timeout since call is being rejected.
+    if (this._incomingCallTimeout) {
+      clearTimeout(this._incomingCallTimeout);
+      this._incomingCallTimeout = null;
+    }
     // Fire-and-forget — don't wait for server. If the call already timed out,
     // this will fail silently, but the UI clears immediately regardless.
     this._callService("reject_call", { call_id: callId, reason: "declined" }).catch(() => {});
