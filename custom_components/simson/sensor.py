@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import time
 
 from homeassistant.components.sensor import SensorEntity
 from homeassistant.config_entries import ConfigEntry
@@ -13,6 +14,21 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from .const import DOMAIN
 
 logger = logging.getLogger(__name__)
+
+STALE_RINGING_SECONDS = 90
+
+
+def _is_stale_ringing_call(active: dict | None) -> bool:
+    if not active:
+        return False
+    state = active.get("state", "")
+    if state not in ("incoming", "ringing", "requesting"):
+        return False
+    try:
+        started_at = float(active.get("started_at") or 0)
+    except (TypeError, ValueError):
+        return False
+    return bool(started_at and (time.time() - started_at) > STALE_RINGING_SECONDS)
 
 
 async def async_setup_entry(
@@ -98,6 +114,8 @@ class SimsonCallStateSensor(SimsonBaseSensor):
         calls_data = self.coordinator.data.get("calls_data", {})
         active = calls_data.get("active_call")
         if active:
+            if _is_stale_ringing_call(active):
+                return "idle"
             return active.get("state", "active")
         return "idle"
 
@@ -108,6 +126,8 @@ class SimsonCallStateSensor(SimsonBaseSensor):
         calls_data = self.coordinator.data.get("calls_data", {})
         active = calls_data.get("active_call")
         if active:
+            if _is_stale_ringing_call(active):
+                return {}
             return {
                 "call_id": active.get("call_id", ""),
                 "direction": active.get("direction", ""),

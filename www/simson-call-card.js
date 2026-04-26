@@ -1,7 +1,11 @@
 /**
- * Simson Call Relay — Lovelace Card v4.6.0
+ * Simson Call Relay — Lovelace Card v4.7.3
  *
  * Full WebRTC voice calling between HA instances + Asterisk SIP phone support.
+ * v4.7.3: Ignore stale sensor-backed ringing/incoming calls so old addon state cannot reopen phantom popups.
+ * v4.7.2: FIX: Phantom incoming call UI spam — added 30s timeout to auto-clear incoming call state.
+ * v4.7.1: WebRTC state logging (ICE, connection, SDP answer), empty WS frame filtering.
+ * v4.7.0: ACK CSeq fix (RFC 3261 §13.2.2.4), 200 OK retransmission handling, AOR config fix.
  * v4.6.0: CRITICAL FIX: SIP message framing — extraHeaders double CRLF placed Content-Length in body,
  *         Via transport WS (not WSS) for Caddy-proxied WebSocket, REGISTER keepalive every 5min.
  * v4.5.10: Fix double SIP UA race: _pendingSIPBridgeId guard prevents second _startSIPCall from killing first.
@@ -35,7 +39,7 @@
  *     - node_id: office2
  */
 
-const VERSION = "4.7.1";
+const VERSION = "4.7.3";
 
 // Default ICE servers (fallback when /api/webrtc-config is unavailable).
 const ICE_SERVERS = [
@@ -1160,9 +1164,20 @@ class SimsonCard extends HTMLElement {
     return this._entity(suffix)?.attributes?.[key] ?? fallback;
   }
   _isConnected() { return this._val("connection") === "connected"; }
-  _callState() { return this._val("call_state", "idle"); }
+  _callState() {
+    const state = this._val("call_state", "idle");
+    if ((state === "incoming" || state === "ringing" || state === "requesting") && this._isStaleRingingCall()) {
+      return "idle";
+    }
+    return state;
+  }
   _activeCallAttr(key, fallback = "") {
     return this._attr("call_state", key, fallback);
+  }
+  _isStaleRingingCall() {
+    const startedAt = Number(this._attr("call_state", "started_at", 0));
+    if (!startedAt) return false;
+    return (Date.now() - startedAt * 1000) > 90000;
   }
 
   // ── HA service calls ────────────────────────────────────────────────
