@@ -1555,6 +1555,7 @@ class SimsonCard extends HTMLElement {
     console.log("[Simson SIP] webrtc-config sip:", JSON.stringify({enabled: sip.enabled, ws_url: sip.ws_url, username: sip.username, domain: sip.domain}));
     if (!sip.enabled || !sip.ws_url || !sip.username || !sip.password) {
       console.warn("[Simson SIP] SIP config missing/disabled — cannot join Asterisk bridge", sip);
+      this._pendingSIPBridgeId = null;
       return;
     }
     const uri = "sip:" + sip.username + "@" + sip.domain;
@@ -1575,6 +1576,7 @@ class SimsonCard extends HTMLElement {
       },
       onRegistered: () => {
         this._sipUA._activeBridge = bridgeId;
+        this._pendingSIPBridgeId = null;
         this._sipUA.dial(bridgeId).catch(e => {
           console.error("Simson SIP dial error:", e);
           this._cleanupSIPUA();
@@ -1582,6 +1584,7 @@ class SimsonCard extends HTMLElement {
       },
       onError: (e) => {
         console.error("Simson SIP UA error:", e);
+        this._pendingSIPBridgeId = null;
         this._cleanupSIPUA();
         this._endActiveCallFromSip();
         this._render();
