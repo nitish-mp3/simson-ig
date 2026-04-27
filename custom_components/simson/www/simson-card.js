@@ -1,7 +1,10 @@
 /**
- * Simson Call Relay — Lovelace Card v4.7.3
+ * Simson Call Relay — Lovelace Card v4.7.4
  *
  * Full WebRTC voice calling between HA instances + Asterisk SIP phone support.
+ * v4.7.4: CRITICAL FIX: MinimalSIPUA REGISTER retry with exponential backoff (fixes browser not registering on auth failures).
+ *         Asterisk AOR template inheritance fixed (browser now successfully keeps contacts).
+ *         Incoming call deduplication (ignore duplicate calls from same extension within 2s — fixes phantom call spam).
  * v4.7.3: Ignore stale sensor-backed ringing/incoming calls so old addon state cannot reopen phantom popups.
  * v4.7.2: FIX: Phantom incoming call UI spam — added 30s timeout to auto-clear incoming call state
  *         if no answer/reject received. Clears timeout on answer, reject, call active, or call end.
@@ -40,7 +43,7 @@
  *     - node_id: office2
  */
 
-const VERSION = "4.7.3";
+const VERSION = "4.7.4";
 
 // Default ICE servers (fallback when /api/webrtc-config is unavailable).
 const ICE_SERVERS = [
@@ -401,6 +404,9 @@ class MinimalSIPUA {
     this._regInterval = null;
     this._inviteCSeq = null;   // CSeq number of the last INVITE (for ACK)
     this._lastAck = null;      // cached ACK for 200 OK retransmissions
+    this._regRetryCount = 0;   // REGISTER retry counter
+    this._regRetryMax = 3;     // max retry attempts
+    this._regRetryDelay = 1000; // exponential backoff: 1s, 2s, 4s
   }
 
   // ── Public API ────────────────────────────────────────────────
@@ -558,6 +564,7 @@ class MinimalSIPUA {
       if (code === 200) {
         console.log("[Simson SIPua] REGISTER 200 OK — registered");
         this._registered = true;
+        this._regRetryCount = 0; // reset retry counter on success
         if (this._regInterval) clearInterval(this._regInterval);
         this._regInterval = setInterval(() => { if (this._registered) this._register(); }, 300000);
         this._onRegistered && this._onRegistered();
@@ -566,7 +573,15 @@ class MinimalSIPUA {
         this._handleDigestChallenge(code, raw, "REGISTER", "sip:" + this._domain(), this._regCallId);
       } else {
         console.error("[Simson SIPua] REGISTER rejected:", code);
-        this._onError && this._onError(new Error("SIP REGISTER rejected: " + code));
+        if (this._regRetryCount < this._regRetryMax) {
+          this._regRetryCount++;
+          const delay = this._regRetryDelay * Math.pow(2, this._regRetryCount - 1);
+          console.warn(`[Simson SIPua] REGISTER failed with ${code}, retrying in ${delay}ms (attempt ${this._regRetryCount}/${this._regRetryMax})`);
+          setTimeout(() => { if (!this._registered) this._register(); }, delay);
+        } else {
+          console.error("[Simson SIPua] REGISTER max retries exceeded");
+          this._onError && this._onError(new Error("SIP REGISTER rejected after retries: " + code));
+        }
       }
     } else if (method === "INVITE") {
       if (code >= 100 && code < 200) return; // provisional
@@ -873,6 +888,8 @@ class SimsonCard extends HTMLElement {
     this._pendingCandidates = [];
     this._answeredByMe = false;   // track if this user answered the call
     this._incomingCallTimeout = null;  // timeout to clear phantom incoming calls
+    this._lastIncomingCall = null;     // "from_node_id|call_type" for deduplication
+    this._lastIncomingCallTime = 0;    // timestamp of last incoming call
 
     // Ringtone
     this._ringCtx = null;
@@ -1115,9 +1132,18 @@ class SimsonCard extends HTMLElement {
     }
     // Suppress rapid-fire re-invites after the user hit Decline.
     if (this._incomingSuppressUntil && Date.now() < this._incomingSuppressUntil) {
+      console.log("[Simson] Ignoring incoming call — suppression active until", this._incomingSuppressUntil);
       this._ignoredCallId = call_id;
       return;
     }
+    // DEDUPLICATE: Ignore calls from same extension within 2s (prevents spam from phone retrying)
+    const callKey = from_node_id + "|" + call_type;
+    if (this._lastIncomingCall === callKey && Date.now() - this._lastIncomingCallTime < 2000) {
+      console.log("[Simson] Ignoring duplicate incoming call from", from_node_id, "within 2s");
+      return;
+    }
+    this._lastIncomingCall = callKey;
+    this._lastIncomingCallTime = Date.now();
     // Clear any existing incoming timeout to prevent race conditions.
     if (this._incomingCallTimeout) {
       clearTimeout(this._incomingCallTimeout);
