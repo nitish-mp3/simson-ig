@@ -1,7 +1,8 @@
 /**
- * Simson Call Relay — Lovelace Card v4.7.4
+ * Simson Call Relay — Lovelace Card v4.7.5
  *
  * Full WebRTC voice calling between HA instances + Asterisk SIP phone support.
+ * v4.7.5: Surface PSTN/landline trunk routing in SIP target cards.
  * v4.7.4: CRITICAL FIX: MinimalSIPUA REGISTER retry with exponential backoff (fixes browser not registering on auth failures).
  *         Asterisk AOR template inheritance fixed (browser now successfully keeps contacts).
  *         Incoming call deduplication (ignore duplicate calls from same extension within 2s — fixes phantom call spam).
@@ -43,7 +44,7 @@
  *     - node_id: office2
  */
 
-const VERSION = "4.7.4";
+const VERSION = "4.7.5";
 
 // Default ICE servers (fallback when /api/webrtc-config is unavailable).
 const ICE_SERVERS = [
@@ -366,6 +367,12 @@ const STYLES = `
   .sip-device .sip-info { flex: 1; }
   .sip-device .sip-label { font-size: 14px; font-weight: 600; color: #ffcc80; }
   .sip-device .sip-ext { font-size: 11px; color: #888; }
+  .sip-route-tag {
+    display: inline-flex; align-items: center; gap: 4px; margin-left: 4px;
+    padding: 1px 6px; border-radius: 999px; background: #e6510018;
+    border: 1px solid #e6510030; color: #ffcc80; font-size: 10px;
+    text-transform: uppercase; letter-spacing: .35px; font-weight: 700;
+  }
   .sip-device .sip-arrow { font-size: 14px; opacity: .35; }
 `;
 
@@ -2225,7 +2232,11 @@ class SimsonCard extends HTMLElement {
                   <div class="sip-icon">${t.icon || "\u{1F4DE}"}</div>
                   <div class="sip-info">
                     <div class="sip-label">${this._esc(t.label || t.id)}</div>
-                    <div class="sip-ext">Ext.\u00A0${this._esc(t.extension || t.label || t.id)}\u00A0\u00B7\u00A0IP Phone / SIP Device</div>
+                    <div class="sip-ext">
+                      ${t.trunk ? "PSTN\u00A0" : "Ext.\u00A0"}${this._esc(t.extension || t.label || t.id)}
+                      \u00A0\u00B7\u00A0${t.trunk ? "Landline via SIP trunk" : "IP Phone / SIP Device"}
+                      ${t.trunk ? `<span class="sip-route-tag">${this._esc(t.trunk)}</span>` : ""}
+                    </div>
                   </div>
                   <div class="sip-arrow">\u2192</div>
                 </div>

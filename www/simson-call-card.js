@@ -1,9 +1,14 @@
 /**
- * Simson Call Relay — Lovelace Card v4.7.3
+ * Simson Call Relay — Lovelace Card v4.7.5
  *
  * Full WebRTC voice calling between HA instances + Asterisk SIP phone support.
+ * v4.7.5: Surface PSTN/landline trunk routing in SIP target cards.
+ * v4.7.4: CRITICAL FIX: MinimalSIPUA REGISTER retry with exponential backoff (fixes browser not registering on auth failures).
+ *         Asterisk AOR template inheritance fixed (browser now successfully keeps contacts).
+ *         Incoming call deduplication (ignore duplicate calls from same extension within 2s — fixes phantom call spam).
  * v4.7.3: Ignore stale sensor-backed ringing/incoming calls so old addon state cannot reopen phantom popups.
- * v4.7.2: FIX: Phantom incoming call UI spam — added 30s timeout to auto-clear incoming call state.
+ * v4.7.2: FIX: Phantom incoming call UI spam — added 30s timeout to auto-clear incoming call state
+ *         if no answer/reject received. Clears timeout on answer, reject, call active, or call end.
  * v4.7.1: WebRTC state logging (ICE, connection, SDP answer), empty WS frame filtering.
  * v4.7.0: ACK CSeq fix (RFC 3261 §13.2.2.4), 200 OK retransmission handling, AOR config fix.
  * v4.6.0: CRITICAL FIX: SIP message framing — extraHeaders double CRLF placed Content-Length in body,
@@ -39,7 +44,7 @@
  *     - node_id: office2
  */
 
-const VERSION = "4.7.3";
+const VERSION = "4.7.5";
 
 // Default ICE servers (fallback when /api/webrtc-config is unavailable).
 const ICE_SERVERS = [
@@ -362,6 +367,12 @@ const STYLES = `
   .sip-device .sip-info { flex: 1; }
   .sip-device .sip-label { font-size: 14px; font-weight: 600; color: #ffcc80; }
   .sip-device .sip-ext { font-size: 11px; color: #888; }
+  .sip-route-tag {
+    display: inline-flex; align-items: center; gap: 4px; margin-left: 4px;
+    padding: 1px 6px; border-radius: 999px; background: #e6510018;
+    border: 1px solid #e6510030; color: #ffcc80; font-size: 10px;
+    text-transform: uppercase; letter-spacing: .35px; font-weight: 700;
+  }
   .sip-device .sip-arrow { font-size: 14px; opacity: .35; }
 `;
 
@@ -400,6 +411,9 @@ class MinimalSIPUA {
     this._regInterval = null;
     this._inviteCSeq = null;   // CSeq number of the last INVITE (for ACK)
     this._lastAck = null;      // cached ACK for 200 OK retransmissions
+    this._regRetryCount = 0;   // REGISTER retry counter
+    this._regRetryMax = 3;     // max retry attempts
+    this._regRetryDelay = 1000; // exponential backoff: 1s, 2s, 4s
   }
 
   // ── Public API ────────────────────────────────────────────────
@@ -557,6 +571,7 @@ class MinimalSIPUA {
       if (code === 200) {
         console.log("[Simson SIPua] REGISTER 200 OK — registered");
         this._registered = true;
+        this._regRetryCount = 0; // reset retry counter on success
         if (this._regInterval) clearInterval(this._regInterval);
         this._regInterval = setInterval(() => { if (this._registered) this._register(); }, 300000);
         this._onRegistered && this._onRegistered();
@@ -565,7 +580,15 @@ class MinimalSIPUA {
         this._handleDigestChallenge(code, raw, "REGISTER", "sip:" + this._domain(), this._regCallId);
       } else {
         console.error("[Simson SIPua] REGISTER rejected:", code);
-        this._onError && this._onError(new Error("SIP REGISTER rejected: " + code));
+        if (this._regRetryCount < this._regRetryMax) {
+          this._regRetryCount++;
+          const delay = this._regRetryDelay * Math.pow(2, this._regRetryCount - 1);
+          console.warn(`[Simson SIPua] REGISTER failed with ${code}, retrying in ${delay}ms (attempt ${this._regRetryCount}/${this._regRetryMax})`);
+          setTimeout(() => { if (!this._registered) this._register(); }, delay);
+        } else {
+          console.error("[Simson SIPua] REGISTER max retries exceeded");
+          this._onError && this._onError(new Error("SIP REGISTER rejected after retries: " + code));
+        }
       }
     } else if (method === "INVITE") {
       if (code >= 100 && code < 200) return; // provisional
@@ -871,6 +894,9 @@ class SimsonCard extends HTMLElement {
     this._makingOffer = false;
     this._pendingCandidates = [];
     this._answeredByMe = false;   // track if this user answered the call
+    this._incomingCallTimeout = null;  // timeout to clear phantom incoming calls
+    this._lastIncomingCall = null;     // "from_node_id|call_type" for deduplication
+    this._lastIncomingCallTime = 0;    // timestamp of last incoming call
 
     // Ringtone
     this._ringCtx = null;
@@ -1046,6 +1072,11 @@ class SimsonCard extends HTMLElement {
     if (!isMyEvent) return;
     if (status === "active") {
       console.log("[Simson] call_status active", { call_id, call_type, sip_bridge_id, direction, remote_node_id });
+      // Clear incoming timeout since call is now active.
+      if (this._incomingCallTimeout) {
+        clearTimeout(this._incomingCallTimeout);
+        this._incomingCallTimeout = null;
+      }
       // If another user on this node answered (call-all), dismiss for me.
       if (direction === "incoming" && answered_by_user_id && answered_by_user_id !== myUserId) {
         this._stopRingtone();
@@ -1080,6 +1111,11 @@ class SimsonCard extends HTMLElement {
       }
       this._render();
     } else if (["ended","failed","missed","declined","timeout"].includes(status)) {
+      // Clear incoming timeout since call has ended.
+      if (this._incomingCallTimeout) {
+        clearTimeout(this._incomingCallTimeout);
+        this._incomingCallTimeout = null;
+      }
       this._stopRingtone();
       this._removePopup();
       this._dismissBrowserNotification();
@@ -1103,8 +1139,22 @@ class SimsonCard extends HTMLElement {
     }
     // Suppress rapid-fire re-invites after the user hit Decline.
     if (this._incomingSuppressUntil && Date.now() < this._incomingSuppressUntil) {
+      console.log("[Simson] Ignoring incoming call — suppression active until", this._incomingSuppressUntil);
       this._ignoredCallId = call_id;
       return;
+    }
+    // DEDUPLICATE: Ignore calls from same extension within 2s (prevents spam from phone retrying)
+    const callKey = from_node_id + "|" + call_type;
+    if (this._lastIncomingCall === callKey && Date.now() - this._lastIncomingCallTime < 2000) {
+      console.log("[Simson] Ignoring duplicate incoming call from", from_node_id, "within 2s");
+      return;
+    }
+    this._lastIncomingCall = callKey;
+    this._lastIncomingCallTime = Date.now();
+    // Clear any existing incoming timeout to prevent race conditions.
+    if (this._incomingCallTimeout) {
+      clearTimeout(this._incomingCallTimeout);
+      this._incomingCallTimeout = null;
     }
     this._currentCallId = call_id;
     this._currentRemoteNode = from_node_id;
@@ -1115,6 +1165,20 @@ class SimsonCard extends HTMLElement {
     this._playRingtone();
     this._showIncomingPopup();
     this._showBrowserNotification(this._incomingFrom, this._incomingCallType);
+    // Auto-clear phantom incoming calls after 30 seconds if no answer/reject.
+    this._incomingCallTimeout = setTimeout(() => {
+      if (this._currentCallId === call_id) {
+        console.log("[Simson] Incoming call timeout - clearing phantom call", call_id);
+        this._stopRingtone();
+        this._removePopup();
+        this._dismissBrowserNotification();
+        this._currentCallId = null;
+        this._currentRemoteNode = null;
+        this._sipBridgeId = null;
+        this._incomingCallTimeout = null;
+        this._render();
+      }
+    }, 30000);
     this._render();
   }
 
@@ -1223,6 +1287,11 @@ class SimsonCard extends HTMLElement {
 
   _answer() {
     const callId = this._activeCallAttr("call_id") || this._currentCallId;
+    // Clear incoming timeout since call is being answered.
+    if (this._incomingCallTimeout) {
+      clearTimeout(this._incomingCallTimeout);
+      this._incomingCallTimeout = null;
+    }
     this._stopRingtone();
     this._removePopup();
     this._dismissBrowserNotification();
@@ -1242,6 +1311,11 @@ class SimsonCard extends HTMLElement {
 
   _reject() {
     const callId = this._activeCallAttr("call_id") || this._currentCallId;
+    // Clear incoming timeout since call is being rejected.
+    if (this._incomingCallTimeout) {
+      clearTimeout(this._incomingCallTimeout);
+      this._incomingCallTimeout = null;
+    }
     // Fire-and-forget — don't wait for server. If the call already timed out,
     // this will fail silently, but the UI clears immediately regardless.
     this._callService("reject_call", { call_id: callId, reason: "declined" }).catch(() => {});
@@ -2158,7 +2232,11 @@ class SimsonCard extends HTMLElement {
                   <div class="sip-icon">${t.icon || "\u{1F4DE}"}</div>
                   <div class="sip-info">
                     <div class="sip-label">${this._esc(t.label || t.id)}</div>
-                    <div class="sip-ext">Ext.\u00A0${this._esc(t.extension || t.label || t.id)}\u00A0\u00B7\u00A0IP Phone / SIP Device</div>
+                    <div class="sip-ext">
+                      ${t.trunk ? "PSTN\u00A0" : "Ext.\u00A0"}${this._esc(t.extension || t.label || t.id)}
+                      \u00A0\u00B7\u00A0${t.trunk ? "Landline via SIP trunk" : "IP Phone / SIP Device"}
+                      ${t.trunk ? `<span class="sip-route-tag">${this._esc(t.trunk)}</span>` : ""}
+                    </div>
                   </div>
                   <div class="sip-arrow">\u2192</div>
                 </div>
