@@ -63,6 +63,18 @@ target_nodes:
     label: Office
 ```
 
+## SIP Phone / Landline Routing
+
+SIP desk phones and ATA-backed landline handsets are configured in the addon panel, not in the Lovelace card.
+
+1. Open the Simson addon panel and copy the HAOS **Node ID** from Overview.
+2. Go to **Settings -> SIP Phone Endpoints -> Add SIP Phone**.
+3. Create an endpoint, for example extension `1025`, username `1025`, and a strong password.
+4. Set **Route To Node ID** to the copied HAOS Node ID when calls to that phone should ring this HA instance.
+5. Configure the SIP phone/ATA with the VPS hostname, port `5060`, TCP or UDP transport, endpoint username/password, and PCMU/PCMA codecs only.
+
+The browser card audio bridge is automatic. Do not add manual SIP-over-WebSocket settings in the integration.
+
 ## Automation Examples
 
 ### Notify on incoming call
