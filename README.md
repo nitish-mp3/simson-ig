@@ -1,7 +1,7 @@
 # Simson Call Relay — Home Assistant Integration
 
 Custom integration that pairs with the **Simson addon** to expose call state sensors and call control services inside Home Assistant.
-
+..
 ## Installation
 
 1. Copy the `custom_components/simson/` folder into your HA `config/custom_components/` directory.
