@@ -1,7 +1,8 @@
 /**
- * Simson Call Relay — Lovelace Card v4.7.5
+ * Simson Call Relay — Lovelace Card v4.7.6
  *
  * Full WebRTC voice calling between HA instances + Asterisk SIP phone support.
+ * v4.7.6: Force SIP bridge media to PCMU/PCMA so Asterisk can mix browser ↔ SIP phone audio without Opus transcoding.
  * v4.7.5: Surface PSTN/landline trunk routing in SIP target cards.
  * v4.7.4: CRITICAL FIX: MinimalSIPUA REGISTER retry with exponential backoff (fixes browser not registering on auth failures).
  *         Asterisk AOR template inheritance fixed (browser now successfully keeps contacts).
@@ -44,7 +45,7 @@
  *     - node_id: office2
  */
 
-const VERSION = "4.7.5";
+const VERSION = "4.7.6";
 
 // Default ICE servers (fallback when /api/webrtc-config is unavailable).
 const ICE_SERVERS = [
@@ -461,6 +462,7 @@ class MinimalSIPUA {
     this._pc.onicegatheringstatechange = () => console.log("[Simson SIPua] ICE gathering:", this._pc?.iceGatheringState);
     this._pc.onicecandidate = (ev) => { if (ev.candidate) console.log("[Simson SIPua] ICE candidate:", ev.candidate.candidate.slice(0, 80)); };
     for (const t of this._localStream.getAudioTracks()) this._pc.addTrack(t, this._localStream);
+    this._preferPcmCodecs();
 
     const offer = await this._pc.createOffer();
     await this._pc.setLocalDescription(offer);
@@ -680,6 +682,7 @@ class MinimalSIPUA {
       this._pc = new RTCPeerConnection({ iceServers: this._iceServers });
       this._pc.ontrack = (ev) => this._onAudioTrack && this._onAudioTrack(ev.streams?.[0] || null, ev.track);
       for (const t of this._localStream.getAudioTracks()) this._pc.addTrack(t, this._localStream);
+      this._preferPcmCodecs();
     }
 
     const toWithTag = to + ";tag=" + this._rand(8);
@@ -708,6 +711,26 @@ class MinimalSIPUA {
     this._cleanup();
     this._callId = null;
     this._onBye && this._onBye();
+  }
+
+  _preferPcmCodecs() {
+    try {
+      const caps = RTCRtpSender.getCapabilities?.("audio");
+      if (!caps?.codecs?.length || !this._pc?.getTransceivers) return;
+      const pcm = caps.codecs.filter(c => {
+        const mime = String(c.mimeType || "").toLowerCase();
+        return (mime === "audio/pcmu" || mime === "audio/pcma") && c.clockRate === 8000;
+      });
+      if (!pcm.length) return;
+      for (const tx of this._pc.getTransceivers()) {
+        if (tx.sender?.track?.kind === "audio" && tx.setCodecPreferences) {
+          tx.setCodecPreferences(pcm);
+          console.log("[Simson SIPua] codec preference:", pcm.map(c => c.mimeType).join(", "));
+        }
+      }
+    } catch (e) {
+      console.warn("[Simson SIPua] codec preference failed:", e);
+    }
   }
 
   // ── Digest auth ───────────────────────────────────────────────
@@ -867,6 +890,8 @@ class SimsonCard extends HTMLElement {
     // Persistent audio element
     this._remoteAudio = document.createElement("audio");
     this._remoteAudio.autoplay = true;
+    this._remoteAudio.muted = false;
+    this._remoteAudio.volume = 1;
     this._remoteAudio.setAttribute("playsinline", "");
     this.shadowRoot.appendChild(this._remoteAudio);
 
@@ -1460,13 +1485,12 @@ class SimsonCard extends HTMLElement {
 
     this._pc.ontrack = (ev) => {
       if (ev.streams?.[0]) {
-        this._remoteAudio.srcObject = ev.streams[0];
+        this._attachRemoteAudio(ev.streams[0], null);
       } else {
         const ms = new MediaStream();
         ms.addTrack(ev.track);
-        this._remoteAudio.srcObject = ms;
+        this._attachRemoteAudio(ms, ev.track);
       }
-      this._remoteAudio.play().catch(() => {});
     };
 
     this._pc.onicecandidate = (ev) => {
@@ -1612,6 +1636,27 @@ class SimsonCard extends HTMLElement {
     this._dismissBrowserNotification();
   }
 
+  _attachRemoteAudio(stream, track = null) {
+    if (!stream && track) {
+      stream = new MediaStream();
+      stream.addTrack(track);
+    }
+    if (!stream) return;
+    this._remoteAudio.autoplay = true;
+    this._remoteAudio.muted = false;
+    this._remoteAudio.volume = 1;
+    this._remoteAudio.srcObject = stream;
+    const audioTracks = stream.getAudioTracks ? stream.getAudioTracks() : [];
+    console.log("[Simson] remote audio attached", {
+      tracks: audioTracks.length,
+      states: audioTracks.map(t => t.readyState),
+      muted: audioTracks.map(t => t.muted),
+    });
+    this._remoteAudio.play().catch(e => {
+      console.warn("[Simson] remote audio play blocked/failed:", e?.message || e);
+    });
+  }
+
   _cleanupSIPUA() {
     if (this._sipUA) {
       try { this._sipUA.disconnect(); } catch (e) { /* ignore */ }
@@ -1654,14 +1699,7 @@ class SimsonCard extends HTMLElement {
       wsUrl: sip.ws_url,
       iceServers: cfg.ice_servers || ICE_SERVERS,
       onAudioTrack: (stream, track) => {
-        if (stream) {
-          this._remoteAudio.srcObject = stream;
-        } else {
-          const ms = new MediaStream();
-          ms.addTrack(track);
-          this._remoteAudio.srcObject = ms;
-        }
-        this._remoteAudio.play().catch(() => {});
+        this._attachRemoteAudio(stream, track);
       },
       onRegistered: () => {
         this._sipUA._activeBridge = bridgeId;
