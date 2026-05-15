@@ -1,7 +1,8 @@
 /**
- * Simson Call Relay — Lovelace Card v4.7.7
+ * Simson Call Relay — Lovelace Card v4.7.8
  *
  * Full WebRTC voice calling between HA instances + Asterisk SIP phone support.
+ * v4.7.8: Treat +E.164/long numbers entered in SIP/callback paths as PSTN gateway calls.
  * v4.7.7: Add direct outside-number dialing through PSTN/GSM trunk, and send SIP BYE before local hangup cleanup.
  * v4.7.6: Force SIP bridge media to PCMU/PCMA so Asterisk can mix browser ↔ SIP phone audio without Opus transcoding.
  * v4.7.5: Surface PSTN/landline trunk routing in SIP target cards.
@@ -46,7 +47,7 @@
  *     - node_id: office2
  */
 
-const VERSION = "4.7.7";
+const VERSION = "4.7.8";
 
 // Default ICE servers (fallback when /api/webrtc-config is unavailable).
 const ICE_SERVERS = [
@@ -1304,6 +1305,11 @@ class SimsonCard extends HTMLElement {
 
   _dialSIPExtension(extension) {
     if (!extension) return;
+    if (this._looksLikePhoneNumber(extension)) {
+      const trunk = (this._pstnTrunkDraft || this._config.pstn_trunk || "7009").trim();
+      this._dialPSTNNumber(extension, trunk);
+      return;
+    }
     this._currentRemoteNode = extension;
     this._callStart = null;
     this._callService("make_call", {
@@ -1325,6 +1331,12 @@ class SimsonCard extends HTMLElement {
       call_type: "sip",
       caller_user_id: this._hass?.user?.id || "",
     });
+  }
+
+  _looksLikePhoneNumber(value) {
+    const raw = String(value || "").trim();
+    const digits = raw.replace(/\D/g, "");
+    return (raw.startsWith("+") && digits.length >= 7) || digits.length >= 7;
   }
 
   _clearLocalCallState() {
