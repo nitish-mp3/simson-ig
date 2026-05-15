@@ -1,6 +1,6 @@
 make_call:
   name: Make Call
-  description: Initiate a call to another Simson node.
+  description: Initiate a call to another Simson node, SIP target, or outside phone number.
   fields:
     target_node_id:
       name: Target Node ID
@@ -20,6 +20,28 @@ make_call:
             - "voice"
             - "sip"
             - "intercom"
+    target_id:
+      name: Target ID
+      description: Configured target ID from the Simson addon settings.
+      required: false
+      example: "front_gate"
+      selector:
+        text:
+    phone_number:
+      name: Phone Number
+      description: Outside phone number to dial through a configured SIP/PSTN trunk. Spaces and leading + are accepted.
+      required: false
+      example: "+9192387324"
+      selector:
+        text:
+    trunk:
+      name: SIP/PSTN Trunk
+      description: Gateway/trunk endpoint to use for outside calls.
+      required: false
+      default: "7009"
+      example: "7009"
+      selector:
+        text:
 
 answer_call:
   name: Answer Call

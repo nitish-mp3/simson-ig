@@ -1,7 +1,8 @@
 /**
- * Simson Call Relay — Lovelace Card v4.7.6
+ * Simson Call Relay — Lovelace Card v4.7.7
  *
  * Full WebRTC voice calling between HA instances + Asterisk SIP phone support.
+ * v4.7.7: Add direct outside-number dialing through PSTN/GSM trunk, and send SIP BYE before local hangup cleanup.
  * v4.7.6: Force SIP bridge media to PCMU/PCMA so Asterisk can mix browser ↔ SIP phone audio without Opus transcoding.
  * v4.7.5: Surface PSTN/landline trunk routing in SIP target cards.
  * v4.7.4: CRITICAL FIX: MinimalSIPUA REGISTER retry with exponential backoff (fixes browser not registering on auth failures).
@@ -45,7 +46,7 @@
  *     - node_id: office2
  */
 
-const VERSION = "4.7.6";
+const VERSION = "4.7.7";
 
 // Default ICE servers (fallback when /api/webrtc-config is unavailable).
 const ICE_SERVERS = [
@@ -857,6 +858,8 @@ class SimsonCard extends HTMLElement {
     this._selectedNode = "";
     this._nodeInputDraft = "";
     this._sipDialDraft = "";
+    this._pstnDialDraft = "";
+    this._pstnTrunkDraft = "";
     this._remoteUsers = [];
     this._usersLoading = false;
     this._usersCache = {};  // nodeId -> { users, timestamp }
@@ -1310,6 +1313,31 @@ class SimsonCard extends HTMLElement {
     });
   }
 
+  _dialPSTNNumber(number, trunk = "7009") {
+    const cleaned = String(number || "").replace(/[^\d+]/g, "");
+    const digits = cleaned.replace(/^\+/, "");
+    if (!digits) return;
+    this._currentRemoteNode = `phone:${cleaned}`;
+    this._callStart = null;
+    this._callService("make_call", {
+      phone_number: cleaned,
+      trunk: trunk || "7009",
+      call_type: "sip",
+      caller_user_id: this._hass?.user?.id || "",
+    });
+  }
+
+  _clearLocalCallState() {
+    this._callStart = null;
+    this._currentCallId = null;
+    this._currentRemoteNode = null;
+    this._sipBridgeId = null;
+    this._isCaller = false;
+    this._answeredByMe = false;
+    this._prevCallState = "idle";
+    this._render();
+  }
+
   _answer() {
     const callId = this._activeCallAttr("call_id") || this._currentCallId;
     // Clear incoming timeout since call is being answered.
@@ -1364,9 +1392,10 @@ class SimsonCard extends HTMLElement {
 
   _hangup() {
     const callId = this._activeCallAttr("call_id") || this._currentCallId;
-    this._callStart = null;
+    try { this._sipUA?.hangup(); } catch (e) { /* ignore */ }
     this._cleanupWebRTC();
-    this._callService("hangup_call", { call_id: callId });
+    this._clearLocalCallState();
+    if (callId) this._callService("hangup_call", { call_id: callId });
   }
 
   _toggleMute() {
@@ -2253,6 +2282,7 @@ class SimsonCard extends HTMLElement {
 
         if (type === "asterisk") {
           // Always show SIP section so users can dial extension even with no configured targets.
+          const defaultPstnTrunk = this._pstnTrunkDraft || this._config.pstn_trunk || "7009";
           dialHtml += `
             <div class="target-section">
               <div class="section-label">\u{1F4DE} Asterisk / SIP</div>
@@ -2262,6 +2292,21 @@ class SimsonCard extends HTMLElement {
                   inputmode="numeric" placeholder="Dial extension\u2026 e.g. 101"
                   ${!connected ? "disabled" : ""} />
                 <button class="sip-ext-btn" id="sip-ext-call" ${!connected ? "disabled" : ""}>Call</button>
+              </div>
+              <div class="section-label" style="margin-top:12px">\u{1F4F2} Phone via Gateway</div>
+              <div class="sip-dial-row">
+                <input id="pstn-number-input" class="sip-ext-input" type="text"
+                  value="${this._esc(this._pstnDialDraft)}"
+                  inputmode="tel" placeholder="+91 92387324..."
+                  ${!connected ? "disabled" : ""} />
+                <input id="pstn-trunk-input" class="sip-ext-input" type="text"
+                  value="${this._esc(defaultPstnTrunk)}"
+                  style="max-width:90px" title="SIP/PSTN trunk"
+                  ${!connected ? "disabled" : ""} />
+                <button class="sip-ext-btn" id="pstn-number-call" ${!connected ? "disabled" : ""}>Call</button>
+              </div>
+              <div style="font-size:11px;color:#777;margin:-4px 0 10px 2px">
+                Uses gateway trunk ${this._esc(defaultPstnTrunk)}. A leading + is accepted and sent as digits.
               </div>
               ${targets.map(t => `
                 <div class="sip-device${!connected ? " disabled" : ""}"
@@ -2376,10 +2421,16 @@ class SimsonCard extends HTMLElement {
     const activeId = root.activeElement?.id || "";
     const nodeInputBefore = root.querySelector("#node-input");
     const sipInputBefore = root.querySelector("#sip-ext-input");
+    const pstnInputBefore = root.querySelector("#pstn-number-input");
+    const pstnTrunkBefore = root.querySelector("#pstn-trunk-input");
     const wasNodeInputFocused = activeId === "node-input";
     const wasSipInputFocused = activeId === "sip-ext-input";
+    const wasPstnInputFocused = activeId === "pstn-number-input";
+    const wasPstnTrunkFocused = activeId === "pstn-trunk-input";
     const nodeCursorPos = wasNodeInputFocused ? nodeInputBefore?.selectionStart : null;
     const sipCursorPos = wasSipInputFocused ? sipInputBefore?.selectionStart : null;
+    const pstnCursorPos = wasPstnInputFocused ? pstnInputBefore?.selectionStart : null;
+    const pstnTrunkCursorPos = wasPstnTrunkFocused ? pstnTrunkBefore?.selectionStart : null;
 
     if (wasNodeInputFocused && nodeInputBefore) {
       this._nodeInputDraft = nodeInputBefore.value;
@@ -2387,6 +2438,12 @@ class SimsonCard extends HTMLElement {
     }
     if (wasSipInputFocused && sipInputBefore) {
       this._sipDialDraft = sipInputBefore.value;
+    }
+    if (wasPstnInputFocused && pstnInputBefore) {
+      this._pstnDialDraft = pstnInputBefore.value;
+    }
+    if (wasPstnTrunkFocused && pstnTrunkBefore) {
+      this._pstnTrunkDraft = pstnTrunkBefore.value;
     }
 
     root.innerHTML = html;
@@ -2491,6 +2548,36 @@ class SimsonCard extends HTMLElement {
     if (wasSipInputFocused && sipInput) {
       sipInput.focus();
       if (sipCursorPos !== null) sipInput.setSelectionRange(sipCursorPos, sipCursorPos);
+    }
+
+    // PSTN/GSM gateway: arbitrary outside number through a configured trunk.
+    const pstnInput = root.querySelector("#pstn-number-input");
+    const pstnTrunkInput = root.querySelector("#pstn-trunk-input");
+    const pstnCallBtn = root.querySelector("#pstn-number-call");
+    pstnInput?.addEventListener("input", (e) => {
+      this._pstnDialDraft = e.target.value;
+    });
+    pstnTrunkInput?.addEventListener("input", (e) => {
+      this._pstnTrunkDraft = e.target.value;
+    });
+    const doPstnDial = () => {
+      const number = (pstnInput?.value ?? this._pstnDialDraft).trim();
+      const trunk = ((pstnTrunkInput?.value ?? this._pstnTrunkDraft) || this._config.pstn_trunk || "7009").trim();
+      if (number) {
+        this._pstnDialDraft = number;
+        this._pstnTrunkDraft = trunk;
+        this._dialPSTNNumber(number, trunk);
+      }
+    };
+    pstnCallBtn?.addEventListener("click", doPstnDial);
+    pstnInput?.addEventListener("keydown", e => { if (e.key === "Enter") doPstnDial(); });
+    pstnTrunkInput?.addEventListener("keydown", e => { if (e.key === "Enter") doPstnDial(); });
+    if (wasPstnInputFocused && pstnInput) {
+      pstnInput.focus();
+      if (pstnCursorPos !== null) pstnInput.setSelectionRange(pstnCursorPos, pstnCursorPos);
+    } else if (wasPstnTrunkFocused && pstnTrunkInput) {
+      pstnTrunkInput.focus();
+      if (pstnTrunkCursorPos !== null) pstnTrunkInput.setSelectionRange(pstnTrunkCursorPos, pstnTrunkCursorPos);
     }
 
     // SIP: device row clicks

@@ -51,12 +51,21 @@ class SimsonApiClient:
 
     async def make_call(self, target_node_id: str = "", call_type: str = "voice",
                         target_id: str = "",
+                        phone_number: str = "",
+                        trunk: str = "",
+                        caller_id: str = "",
                         target_user_id: str = "",
                         target_user_name: str = "",
                         caller_user_id: str = "") -> dict:
         data = {"call_type": call_type}
         if target_id:
             data["target_id"] = target_id
+        if phone_number:
+            data["phone_number"] = phone_number
+        if trunk:
+            data["trunk"] = trunk
+        if caller_id:
+            data["caller_id"] = caller_id
         if target_node_id:
             data["target_node_id"] = target_node_id
         if target_user_id:

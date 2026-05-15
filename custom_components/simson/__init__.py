@@ -38,7 +38,7 @@ logger = logging.getLogger(__name__)
 
 SCAN_INTERVAL = timedelta(seconds=5)
 _CARD_JS_PATH = "/simson/www/simson-card.js"
-_CARD_URL = f"{_CARD_JS_PATH}?v=4.7.6"  # bump this whenever the card JS changes
+_CARD_URL = f"{_CARD_JS_PATH}?v=4.7.7"  # bump this whenever the card JS changes
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -159,6 +159,9 @@ def _register_services(hass: HomeAssistant, client: SimsonApiClient) -> None:
     async def handle_make_call(call: ServiceCall) -> None:
         target = call.data.get("target_node_id", "")
         target_id = call.data.get("target_id", "")
+        phone_number = call.data.get("phone_number", "")
+        trunk = call.data.get("trunk", "")
+        caller_id = call.data.get("caller_id", "")
         call_type = call.data.get("call_type", "voice")
         target_user_id = call.data.get("target_user_id", "")
         target_user_name = call.data.get("target_user_name", "")
@@ -168,6 +171,9 @@ def _register_services(hass: HomeAssistant, client: SimsonApiClient) -> None:
                 target_node_id=target,
                 call_type=call_type,
                 target_id=target_id,
+                phone_number=phone_number,
+                trunk=trunk,
+                caller_id=caller_id,
                 target_user_id=target_user_id,
                 target_user_name=target_user_name,
                 caller_user_id=caller_user_id,
@@ -207,6 +213,9 @@ def _register_services(hass: HomeAssistant, client: SimsonApiClient) -> None:
             schema=vol.Schema({
                 vol.Optional("target_node_id", default=""): str,
                 vol.Optional("target_id", default=""): str,
+                vol.Optional("phone_number", default=""): str,
+                vol.Optional("trunk", default=""): str,
+                vol.Optional("caller_id", default=""): str,
                 vol.Optional("call_type", default="voice"): str,
                 vol.Optional("target_user_id", default=""): str,
                 vol.Optional("target_user_name", default=""): str,

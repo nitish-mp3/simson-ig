@@ -22,7 +22,7 @@ Custom integration that pairs with the **Simson addon** to expose call state sen
 
 | Service | Description | Parameters |
 |---------|-------------|------------|
-| `simson.make_call` | Initiate a call | `target_node_id` (required), `call_type` (optional, default: `voice`) |
+| `simson.make_call` | Initiate a call | `target_node_id` or `target_id`; for outside calls use `phone_number` plus optional `trunk` such as `7009` |
 | `simson.answer_call` | Answer an incoming call | `call_id` (required) |
 | `simson.reject_call` | Reject an incoming call | `call_id` (required), `reason` (optional) |
 | `simson.hangup_call` | End an active call | `call_id` (required) |
@@ -74,6 +74,8 @@ SIP desk phones and ATA-backed landline handsets are configured in the addon pan
 5. Configure the SIP phone/ATA with the VPS hostname, port `5060`, TCP or UDP transport, endpoint username/password, and PCMU/PCMA codecs only.
 
 The browser card audio bridge is automatic. Do not add manual SIP-over-WebSocket settings in the integration.
+
+For GSM/PSTN callback from the card, use **Phone via Gateway**, enter a number like `+9192387324`, and keep the trunk field as `7009` for the current Synway GSM gateway.
 
 ## Automation Examples
 
