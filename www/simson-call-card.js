@@ -1,7 +1,8 @@
 /**
- * Simson Call Relay — Lovelace Card v4.7.8
+ * Simson Call Relay — Lovelace Card v4.8.0
  *
  * Full WebRTC voice calling between HA instances + Asterisk SIP phone support.
+ * v4.8.0: Add SIP/gateway call transfer, targeted transfer ringing, and smoother premium dial controls.
  * v4.7.8: Treat +E.164/long numbers entered in SIP/callback paths as PSTN gateway calls.
  * v4.7.7: Add direct outside-number dialing through PSTN/GSM trunk, and send SIP BYE before local hangup cleanup.
  * v4.7.6: Force SIP bridge media to PCMU/PCMA so Asterisk can mix browser ↔ SIP phone audio without Opus transcoding.
@@ -47,7 +48,7 @@
  *     - node_id: office2
  */
 
-const VERSION = "4.7.8";
+const VERSION = "4.8.0";
 
 // Default ICE servers (fallback when /api/webrtc-config is unavailable).
 const ICE_SERVERS = [
@@ -227,6 +228,35 @@ const STYLES = `
     font-size: 13px; color: #4fc3f7; font-variant-numeric: tabular-nums;
     font-weight: 600;
   }
+  .transfer-panel {
+    margin-top: 14px; padding-top: 14px; border-top: 1px solid #ffffff12;
+  }
+  .transfer-title {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 10px; margin-bottom: 9px; color: #9ecbff; font-size: 11px;
+    font-weight: 800; text-transform: uppercase; letter-spacing: .7px;
+  }
+  .transfer-row { display: flex; gap: 8px; align-items: stretch; }
+  .transfer-input {
+    min-width: 0; flex: 1; background: #ffffff0a; border: 1px solid #4fc3f733;
+    color: #e8f5ff; border-radius: 12px; padding: 10px 12px; outline: none;
+    font-size: 13px;
+  }
+  .transfer-input:focus {
+    border-color: #4fc3f7aa; box-shadow: 0 0 0 3px #4fc3f718;
+  }
+  .transfer-users {
+    display: grid; gap: 6px; margin-top: 8px;
+  }
+  .transfer-user {
+    display: flex; align-items: center; justify-content: space-between; gap: 10px;
+    border: 1px solid #ffffff12; background: #ffffff07; color: #f0f7ff;
+    border-radius: 11px; padding: 8px 10px; cursor: pointer; text-align: left;
+  }
+  .transfer-user:hover { background: #4fc3f713; border-color: #4fc3f744; }
+  .transfer-user small { color: #8aa0b8; display: block; margin-top: 2px; }
+  .btn-transfer { background: #0b6e99; color: #fff; }
+  .btn-transfer:hover { background: #0d83b8; }
 
   /* Quality indicator */
   .quality-bar {
@@ -940,6 +970,10 @@ class SimsonCard extends HTMLElement {
     this._userPickerNodeId = "";
     this._userPickerTargetId = "";
     this._ignoredCallId = null;
+    this._transferNodeDraft = "";
+    this._transferUsers = [];
+    this._transferUsersNode = "";
+    this._transferLoading = false;
 
     // Notifications
     this._notifPermission = typeof Notification !== "undefined" ? Notification.permission : "denied";
@@ -976,6 +1010,7 @@ class SimsonCard extends HTMLElement {
       title: config.title || "Simson",
       node_id: nodeId,
       target_nodes: targetNodes,
+      pstn_trunk: config.pstn_trunk || "7009",
     };
 
     // Pre-seed cache slots so configured nodes immediately appear in suggestions.
@@ -1003,6 +1038,9 @@ class SimsonCard extends HTMLElement {
     }
     if (!this._targetsLoaded && !this._targetsLoading) {
       this._loadTargets();
+    }
+    if (this._hasEditingFocus()) {
+      return;
     }
     this._render();
   }
@@ -1219,6 +1257,12 @@ class SimsonCard extends HTMLElement {
       if (nodeId) {
         this._usersCache[nodeId] = { users: data.users, timestamp: Date.now() };
       }
+      if (this._transferLoading && nodeId === this._transferUsersNode) {
+        this._transferUsers = data.users;
+        this._transferLoading = false;
+        this._render();
+        return;
+      }
       // If we have a pending user picker, show it.
       if (this._userPickerNodeId) {
         this._showUserPickerPopup();
@@ -1408,6 +1452,39 @@ class SimsonCard extends HTMLElement {
     this._cleanupWebRTC();
     this._clearLocalCallState();
     if (callId) this._callService("hangup_call", { call_id: callId });
+  }
+
+  _transferCall(targetNodeId, targetUserId = "", targetUserName = "") {
+    const callId = this._activeCallAttr("call_id") || this._currentCallId;
+    const nodeId = String(targetNodeId || "").trim();
+    if (!callId || !nodeId) return;
+    this._callService("transfer_call", {
+      call_id: callId,
+      target_node_id: nodeId,
+      target_user_id: targetUserId || "",
+      target_user_name: targetUserName || "",
+    });
+  }
+
+  _loadTransferUsers(nodeId) {
+    const target = String(nodeId || "").trim();
+    if (!target) return;
+    const cached = this._usersCache[target];
+    this._transferNodeDraft = target;
+    this._transferUsersNode = target;
+    if (cached && Date.now() - cached.timestamp < 30000) {
+      this._transferUsers = cached.users || [];
+      this._transferLoading = false;
+      this._render();
+      return;
+    }
+    this._transferUsers = [];
+    this._transferLoading = true;
+    this._render();
+    this._callService("get_remote_users", { node_id: target }).catch(() => {
+      this._transferLoading = false;
+      this._render();
+    });
   }
 
   _toggleMute() {
@@ -2021,6 +2098,12 @@ class SimsonCard extends HTMLElement {
 
   _root() { return this.shadowRoot; }
 
+  _hasEditingFocus() {
+    const el = this._root()?.activeElement;
+    if (!el) return false;
+    return ["INPUT", "TEXTAREA", "SELECT"].includes(el.tagName);
+  }
+
   _render() {
     const nodeId = this._nodeId();
     if (!nodeId) {
@@ -2181,6 +2264,32 @@ class SimsonCard extends HTMLElement {
     // Call panel
     let callPanelHtml = "";
     if (hasCall) {
+      const canTransfer = isActive && (activeSipBridgeId || this._sipBridgeId || activeCallType === "sip");
+      const transferNodeValue = this._transferNodeDraft || "";
+      const transferUsersHtml = canTransfer && this._transferUsersNode === transferNodeValue.trim()
+        ? this._transferUsers.map(u => `
+            <button class="transfer-user" data-transfer-uid="${this._esc(u.user_id)}" data-transfer-uname="${this._esc(u.user_name)}">
+              <span>${this._esc(u.user_name)}<small>${this._esc(transferNodeValue)} · ${this._esc(u.user_id)}</small></span>
+              <span>Transfer</span>
+            </button>
+          `).join("")
+        : "";
+      const transferPanelHtml = canTransfer ? `
+          <div class="transfer-panel">
+            <div class="transfer-title">
+              <span>Transfer Call</span>
+              <span>${this._esc(this._transferUsersNode || "node/user")}</span>
+            </div>
+            <div class="transfer-row">
+              <input id="transfer-node-input" class="transfer-input" type="text"
+                value="${this._esc(transferNodeValue)}" placeholder="Target node ID"
+                autocomplete="off" />
+              <button class="btn btn-transfer" id="btn-transfer-load">${this._transferLoading ? "Loading" : "Users"}</button>
+              <button class="btn btn-transfer" id="btn-transfer-node">Transfer</button>
+            </div>
+            ${this._transferLoading ? `<div class="users-loading">Checking users...</div>` : ""}
+            ${transferUsersHtml ? `<div class="transfer-users">${transferUsersHtml}</div>` : ""}
+          </div>` : "";
       callPanelHtml = `
         <div class="call-panel ${isIncoming ? "incoming" : ""}">
           <div class="call-who">${this._esc(remoteLabel)}</div>
@@ -2200,6 +2309,7 @@ class SimsonCard extends HTMLElement {
                  <button class="btn btn-hangup" id="btn-hangup">\u{1F4F4} Hang Up</button>`
             }
           </div>
+          ${transferPanelHtml}
         </div>`;
     }
 
@@ -2435,14 +2545,17 @@ class SimsonCard extends HTMLElement {
     const sipInputBefore = root.querySelector("#sip-ext-input");
     const pstnInputBefore = root.querySelector("#pstn-number-input");
     const pstnTrunkBefore = root.querySelector("#pstn-trunk-input");
+    const transferInputBefore = root.querySelector("#transfer-node-input");
     const wasNodeInputFocused = activeId === "node-input";
     const wasSipInputFocused = activeId === "sip-ext-input";
     const wasPstnInputFocused = activeId === "pstn-number-input";
     const wasPstnTrunkFocused = activeId === "pstn-trunk-input";
+    const wasTransferInputFocused = activeId === "transfer-node-input";
     const nodeCursorPos = wasNodeInputFocused ? nodeInputBefore?.selectionStart : null;
     const sipCursorPos = wasSipInputFocused ? sipInputBefore?.selectionStart : null;
     const pstnCursorPos = wasPstnInputFocused ? pstnInputBefore?.selectionStart : null;
     const pstnTrunkCursorPos = wasPstnTrunkFocused ? pstnTrunkBefore?.selectionStart : null;
+    const transferCursorPos = wasTransferInputFocused ? transferInputBefore?.selectionStart : null;
 
     if (wasNodeInputFocused && nodeInputBefore) {
       this._nodeInputDraft = nodeInputBefore.value;
@@ -2457,6 +2570,9 @@ class SimsonCard extends HTMLElement {
     if (wasPstnTrunkFocused && pstnTrunkBefore) {
       this._pstnTrunkDraft = pstnTrunkBefore.value;
     }
+    if (wasTransferInputFocused && transferInputBefore) {
+      this._transferNodeDraft = transferInputBefore.value;
+    }
 
     root.innerHTML = html;
 
@@ -2466,6 +2582,29 @@ class SimsonCard extends HTMLElement {
     root.querySelector("#btn-hangup")?.addEventListener("click", () => this._hangup());
     root.querySelector("#btn-mute")?.addEventListener("click", () => this._toggleMute());
     root.querySelector("#btn-notif-perm")?.addEventListener("click", () => this._requestNotificationPermission());
+
+    const transferInput = root.querySelector("#transfer-node-input");
+    transferInput?.addEventListener("input", (e) => {
+      this._transferNodeDraft = e.target.value;
+    });
+    root.querySelector("#btn-transfer-load")?.addEventListener("click", () => {
+      this._loadTransferUsers(transferInput?.value || this._transferNodeDraft);
+    });
+    root.querySelector("#btn-transfer-node")?.addEventListener("click", () => {
+      this._transferCall(transferInput?.value || this._transferNodeDraft);
+    });
+    transferInput?.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") this._loadTransferUsers(e.target.value);
+    });
+    root.querySelectorAll("[data-transfer-uid]").forEach(btn => {
+      btn.addEventListener("click", () => {
+        this._transferCall(this._transferUsersNode || this._transferNodeDraft, btn.dataset.transferUid, btn.dataset.transferUname);
+      });
+    });
+    if (wasTransferInputFocused && transferInput) {
+      transferInput.focus();
+      if (transferCursorPos !== null) transferInput.setSelectionRange(transferCursorPos, transferCursorPos);
+    }
 
     // Tabs
     root.querySelectorAll(".tab").forEach(tab => {

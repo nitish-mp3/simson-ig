@@ -88,6 +88,19 @@ class SimsonApiClient:
     async def hangup_call(self, call_id: str) -> dict:
         return await self._post("/api/hangup", {"call_id": call_id})
 
+    async def transfer_call(self, call_id: str, target_node_id: str,
+                            target_user_id: str = "",
+                            target_user_name: str = "") -> dict:
+        data = {
+            "call_id": call_id,
+            "target_node_id": target_node_id,
+        }
+        if target_user_id:
+            data["target_user_id"] = target_user_id
+        if target_user_name:
+            data["target_user_name"] = target_user_name
+        return await self._post("/api/transfer", data)
+
     async def targets(self) -> dict:
         return await self._get("/api/targets")
 

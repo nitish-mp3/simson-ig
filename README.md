@@ -27,6 +27,7 @@ Custom integration that pairs with the **Simson addon** to expose call state sen
 | `simson.answer_call` | Answer an incoming call | `call_id` (required) |
 | `simson.reject_call` | Reject an incoming call | `call_id` (required), `reason` (optional) |
 | `simson.hangup_call` | End an active call | `call_id` (required) |
+| `simson.transfer_call` | Transfer an active SIP/gateway bridge call to another node/user | `call_id`, `target_node_id`, optional `target_user_id`, `target_user_name` |
 
 ## Events
 
@@ -77,6 +78,12 @@ SIP desk phones and ATA-backed landline handsets are configured in the addon pan
 The browser card audio bridge is automatic. Do not add manual SIP-over-WebSocket settings in the integration.
 
 For GSM/PSTN callback from the card, use **Phone via Gateway**, enter a number like `+9192387324`, and keep the trunk field as `7009` for the current Synway GSM gateway.
+
+## Call Transfer
+
+During an active SIP/PSTN/GSM bridge call, the Lovelace card shows **Transfer Call**. Enter a target node ID, press **Users** to see active users on that node, then transfer either to the whole node or to one named user. The current browser leg is dismissed only after the new target answers, so the gateway/SIP audio bridge stays alive.
+
+Targeted transfers and direct user calls include `target_user_id` / `target_user_name` in `simson_incoming_call`, so HA automations can route mobile notifications to the intended user even when their dashboard is not open.
 
 ## Automation Examples
 

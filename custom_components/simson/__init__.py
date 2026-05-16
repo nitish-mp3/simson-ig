@@ -27,6 +27,7 @@ from .const import (
     SERVICE_ANSWER_CALL,
     SERVICE_REJECT_CALL,
     SERVICE_HANGUP_CALL,
+    SERVICE_TRANSFER_CALL,
     SERVICE_WEBRTC_SIGNAL,
     SERVICE_GET_TARGETS,
     SERVICE_USER_HEARTBEAT,
@@ -38,7 +39,7 @@ logger = logging.getLogger(__name__)
 
 SCAN_INTERVAL = timedelta(seconds=5)
 _CARD_JS_PATH = "/simson/www/simson-card.js"
-_CARD_URL = f"{_CARD_JS_PATH}?v=4.7.8"  # bump this whenever the card JS changes
+_CARD_URL = f"{_CARD_JS_PATH}?v=4.8.0"  # bump this whenever the card JS changes
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -205,6 +206,21 @@ def _register_services(hass: HomeAssistant, client: SimsonApiClient) -> None:
         except Exception as err:
             logger.error("Failed to hangup call: %s", err)
 
+    async def handle_transfer_call(call: ServiceCall) -> None:
+        call_id = call.data["call_id"]
+        target_node_id = call.data["target_node_id"]
+        target_user_id = call.data.get("target_user_id", "")
+        target_user_name = call.data.get("target_user_name", "")
+        try:
+            await client.transfer_call(
+                call_id,
+                target_node_id,
+                target_user_id=target_user_id,
+                target_user_name=target_user_name,
+            )
+        except Exception as err:
+            logger.error("Failed to transfer call: %s", err)
+
     if not hass.services.has_service(DOMAIN, SERVICE_MAKE_CALL):
         hass.services.async_register(
             DOMAIN,
@@ -246,6 +262,30 @@ def _register_services(hass: HomeAssistant, client: SimsonApiClient) -> None:
             handle_hangup_call,
             schema=vol.Schema({
                 vol.Required("call_id"): str,
+            }),
+        )
+        hass.services.async_register(
+            DOMAIN,
+            SERVICE_TRANSFER_CALL,
+            handle_transfer_call,
+            schema=vol.Schema({
+                vol.Required("call_id"): str,
+                vol.Required("target_node_id"): str,
+                vol.Optional("target_user_id", default=""): str,
+                vol.Optional("target_user_name", default=""): str,
+            }),
+        )
+
+    if not hass.services.has_service(DOMAIN, SERVICE_TRANSFER_CALL):
+        hass.services.async_register(
+            DOMAIN,
+            SERVICE_TRANSFER_CALL,
+            handle_transfer_call,
+            schema=vol.Schema({
+                vol.Required("call_id"): str,
+                vol.Required("target_node_id"): str,
+                vol.Optional("target_user_id", default=""): str,
+                vol.Optional("target_user_name", default=""): str,
             }),
         )
 
