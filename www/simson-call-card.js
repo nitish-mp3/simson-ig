@@ -1,7 +1,8 @@
 /**
- * Simson Call Relay — Lovelace Card v4.8.0
+ * Simson Call Relay — Lovelace Card v4.8.1
  *
  * Full WebRTC voice calling between HA instances + Asterisk SIP phone support.
+ * v4.8.1: Premium idle dial pad redesign with clearer gateway/SIP controls.
  * v4.8.0: Add SIP/gateway call transfer, targeted transfer ringing, and smoother premium dial controls.
  * v4.7.8: Treat +E.164/long numbers entered in SIP/callback paths as PSTN gateway calls.
  * v4.7.7: Add direct outside-number dialing through PSTN/GSM trunk, and send SIP BYE before local hangup cleanup.
@@ -48,7 +49,7 @@
  *     - node_id: office2
  */
 
-const VERSION = "4.8.0";
+const VERSION = "4.8.1";
 
 // Default ICE servers (fallback when /api/webrtc-config is unavailable).
 const ICE_SERVERS = [
@@ -65,21 +66,27 @@ const STYLES = `
   * { box-sizing: border-box; }
 
   .card {
-    background: var(--ha-card-background, var(--card-background-color, #1c1c1e));
-    border-radius: var(--ha-card-border-radius, 12px);
-    padding: 20px;
+    position: relative; overflow: hidden;
+    background:
+      radial-gradient(circle at 12% 0%, rgba(0, 188, 212, .14), transparent 34%),
+      radial-gradient(circle at 92% 18%, rgba(255, 111, 0, .11), transparent 28%),
+      linear-gradient(145deg, #191917 0%, #111315 55%, #17130f 100%);
+    border: 1px solid rgba(255,255,255,.09);
+    border-radius: var(--ha-card-border-radius, 18px);
+    padding: 22px;
     font-family: var(--primary-font-family, system-ui, -apple-system, sans-serif);
     color: var(--primary-text-color, #e1e1e1);
-    box-shadow: var(--ha-card-box-shadow, none);
+    box-shadow: var(--ha-card-box-shadow, 0 22px 70px rgba(0,0,0,.34));
   }
 
   /* Header */
   .header {
-    display: flex; align-items: center; gap: 12px; margin-bottom: 16px;
+    display: flex; align-items: center; gap: 12px; margin-bottom: 18px;
   }
   .header-icon {
-    width: 40px; height: 40px; background: linear-gradient(135deg, #03a9f422, #03a9f411);
-    border-radius: 12px; display: flex; align-items: center; justify-content: center;
+    width: 46px; height: 46px; background: linear-gradient(135deg, #0ea5a544, #f9731628);
+    border: 1px solid rgba(255,255,255,.08);
+    border-radius: 16px; display: flex; align-items: center; justify-content: center;
     font-size: 20px; flex-shrink: 0;
   }
   .header-title { font-size: 17px; font-weight: 700; flex: 1; letter-spacing: -0.2px; }
@@ -92,23 +99,77 @@ const STYLES = `
 
   /* Tabs */
   .tabs {
-    display: flex; gap: 2px; margin-bottom: 16px;
-    background: #ffffff08; border-radius: 10px; padding: 3px;
+    display: flex; gap: 4px; margin-bottom: 18px;
+    background: rgba(255,255,255,.055); border: 1px solid rgba(255,255,255,.06);
+    border-radius: 14px; padding: 4px;
   }
   .tab {
-    flex: 1; padding: 8px 0; text-align: center; font-size: 12px; font-weight: 600;
+    flex: 1; padding: 11px 0; text-align: center; font-size: 12px; font-weight: 800;
     text-transform: uppercase; letter-spacing: .5px; border-radius: 8px;
     cursor: pointer; transition: all .2s; color: #888;
     border: none; background: none;
   }
   .tab:hover { color: #bbb; }
-  .tab.active { background: #03a9f418; color: #4fc3f7; }
+  .tab.active { background: linear-gradient(135deg, #103542, #1d4b39); color: #7ee7ff; box-shadow: inset 0 0 0 1px rgba(126,231,255,.12); }
 
   /* Dial section */
   .section-label {
-    font-size: 11px; color: #666; text-transform: uppercase; letter-spacing: .6px;
+    font-size: 11px; color: #8a8a82; text-transform: uppercase; letter-spacing: .85px;
     margin-bottom: 8px; font-weight: 600;
   }
+  .dial-console {
+    background: linear-gradient(145deg, rgba(255,255,255,.08), rgba(255,255,255,.035));
+    border: 1px solid rgba(255,255,255,.105);
+    border-radius: 18px; padding: 14px; margin-bottom: 14px;
+  }
+  .dial-hero {
+    display: flex; justify-content: space-between; gap: 12px; align-items: flex-start;
+    margin-bottom: 12px;
+  }
+  .dial-title { font-size: 15px; font-weight: 850; letter-spacing: -.2px; }
+  .dial-subtitle { font-size: 11px; color: #8a8a82; margin-top: 3px; line-height: 1.4; }
+  .dial-pill {
+    border: 1px solid rgba(126,231,255,.2); background: rgba(14,165,165,.14);
+    color: #9befff; border-radius: 999px; padding: 4px 9px; font-size: 10px;
+    font-weight: 800; text-transform: uppercase; letter-spacing: .55px; white-space: nowrap;
+  }
+  .dial-grid { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; align-items: end; }
+  .dial-field {
+    display: block; background: rgba(0,0,0,.18); border: 1px solid rgba(255,255,255,.095);
+    border-radius: 15px; padding: 9px 12px 11px;
+  }
+  .dial-field span {
+    display: block; font-size: 10px; color: #8a8a82; text-transform: uppercase;
+    letter-spacing: .75px; margin-bottom: 5px; font-weight: 800;
+  }
+  .dial-field input {
+    width: 100%; border: 0; outline: 0; background: transparent; color: #f5f7f4;
+    font-size: 16px; line-height: 1.5;
+  }
+  .dial-field input::placeholder { color: rgba(245,247,244,.36); }
+  .dial-field:focus-within {
+    border-color: rgba(126,231,255,.58); box-shadow: 0 0 0 3px rgba(126,231,255,.12);
+  }
+  .dial-action {
+    min-height: 58px; border: 0; border-radius: 15px; padding: 0 18px;
+    background: linear-gradient(135deg, #1f8f48, #2fb35f); color: white; cursor: pointer;
+    font-size: 13px; font-weight: 850; box-shadow: 0 12px 28px rgba(47,179,95,.22);
+  }
+  .dial-action:hover { filter: brightness(1.08); }
+  .dial-action:disabled { opacity: .45; cursor: not-allowed; box-shadow: none; }
+  .dial-card {
+    background: linear-gradient(145deg, rgba(230,81,0,.11), rgba(255,255,255,.035));
+    border: 1px solid rgba(230,81,0,.18); border-radius: 18px;
+    padding: 14px; margin-bottom: 12px;
+  }
+  .dial-card.blue {
+    background: linear-gradient(145deg, rgba(14,165,165,.12), rgba(255,255,255,.035));
+    border-color: rgba(14,165,165,.2);
+  }
+  .dial-card-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 10px; }
+  .dial-card-title { font-size: 13px; color: #ffe1bd; font-weight: 850; text-transform: uppercase; letter-spacing: .7px; }
+  .dial-card.blue .dial-card-title { color: #a7f3ff; }
+  .dial-card-hint { color: #8a8a82; font-size: 11px; }
   .select-wrap {
     position: relative; margin-bottom: 12px;
   }
@@ -368,21 +429,21 @@ const STYLES = `
 
   /* ── SIP / Asterisk enhanced UI ── */
   .sip-dial-row {
-    display: flex; gap: 6px; margin-bottom: 10px;
+    display: flex; gap: 8px; margin-bottom: 10px;
   }
   .sip-ext-input {
-    flex: 1; background: #ffffff08; border: 1px solid #e6510030;
-    border-radius: 10px; padding: 10px 14px; font-size: 14px; color: #ffcc80;
+    flex: 1; background: rgba(0,0,0,.20); border: 1px solid #e6510030;
+    border-radius: 14px; padding: 13px 14px; font-size: 16px; color: #ffcc80;
     outline: none; min-width: 0;
   }
   .sip-ext-input:focus { border-color: #e6510066; background: #e6510008; }
   .sip-ext-input::placeholder { color: #555; }
   .sip-ext-btn {
-    background: #e65100; color: #fff; border: none; border-radius: 10px;
-    padding: 10px 16px; font-size: 13px; font-weight: 700; cursor: pointer;
-    white-space: nowrap; transition: background .15s;
+    background: linear-gradient(135deg, #f97316, #ea580c); color: #fff; border: none; border-radius: 14px;
+    padding: 12px 18px; font-size: 13px; font-weight: 850; cursor: pointer;
+    white-space: nowrap; transition: filter .15s; box-shadow: 0 12px 28px rgba(249,115,22,.18);
   }
-  .sip-ext-btn:hover { background: #f4511e; }
+  .sip-ext-btn:hover { filter: brightness(1.08); }
   .sip-ext-btn:disabled { opacity: .4; cursor: not-allowed; }
   .sip-device {
     display: flex; align-items: center; gap: 10px; padding: 10px 14px;
@@ -407,6 +468,13 @@ const STYLES = `
     text-transform: uppercase; letter-spacing: .35px; font-weight: 700;
   }
   .sip-device .sip-arrow { font-size: 14px; opacity: .35; }
+  @media (max-width: 520px) {
+    .card { padding: 16px; border-radius: 16px; }
+    .dial-grid { grid-template-columns: 1fr; }
+    .dial-action { width: 100%; }
+    .sip-dial-row { flex-wrap: wrap; }
+    .sip-ext-btn { flex: 1 0 96px; }
+  }
 `;
 
 // ── MinimalSIPUA ─────────────────────────────────────────────────────────────
@@ -2340,11 +2408,23 @@ class SimsonCard extends HTMLElement {
 
       // Node input
       dialHtml = `
-        <div class="section-label">Select Node</div>
-        <div class="select-wrap no-arrow">
-          <input id="node-input" type="text" placeholder="Enter node ID (e.g. office, central2)"
-            value="${this._esc(this._nodeInputDraft || this._selectedNode)}" ${!connected ? "disabled" : ""}
-            list="node-suggestions" autocomplete="off" />
+        <div class="dial-console">
+          <div class="dial-hero">
+            <div>
+              <div class="dial-title">Universal dial pad</div>
+              <div class="dial-subtitle">Call a home node, a SIP extension, or an outside number through a local gateway.</div>
+            </div>
+            <div class="dial-pill">${this._esc(nodeId)}</div>
+          </div>
+          <div class="dial-grid">
+            <label class="dial-field">
+              <span>Node / Location</span>
+              <input id="node-input" type="text" placeholder="office, central1, lobby..."
+                value="${this._esc(this._nodeInputDraft || this._selectedNode)}" ${!connected ? "disabled" : ""}
+                list="node-suggestions" autocomplete="off" />
+            </label>
+            <button class="dial-action" id="btn-call-manual" ${!connected ? "disabled" : ""}>Call Node</button>
+          </div>
         </div>
         <datalist id="node-suggestions">
           ${[...knownNodes].map(n => `<option value="${this._esc(n)}">`).join("")}
@@ -2387,12 +2467,6 @@ class SimsonCard extends HTMLElement {
             </div>
           `;
         }
-      } else {
-        dialHtml += `
-          <button class="btn btn-call" id="btn-call-manual" ${!connected ? "disabled" : ""}>
-            \u{1F4DE} Call
-          </button>
-        `;
       }
 
       // Non-node targets
@@ -2407,7 +2481,11 @@ class SimsonCard extends HTMLElement {
           const defaultPstnTrunk = this._pstnTrunkDraft || this._config.pstn_trunk || "7009";
           dialHtml += `
             <div class="target-section">
-              <div class="section-label">\u{1F4DE} Asterisk / SIP</div>
+              <div class="dial-card blue">
+              <div class="dial-card-head">
+                <div class="dial-card-title">\u{1F4DE} Asterisk / SIP</div>
+                <div class="dial-card-hint">Internal extensions</div>
+              </div>
               <div class="sip-dial-row">
                 <input id="sip-ext-input" class="sip-ext-input" type="text"
                   value="${this._esc(this._sipDialDraft)}"
@@ -2415,7 +2493,12 @@ class SimsonCard extends HTMLElement {
                   ${!connected ? "disabled" : ""} />
                 <button class="sip-ext-btn" id="sip-ext-call" ${!connected ? "disabled" : ""}>Call</button>
               </div>
-              <div class="section-label" style="margin-top:12px">\u{1F4F2} Phone via Gateway</div>
+              </div>
+              <div class="dial-card">
+              <div class="dial-card-head">
+                <div class="dial-card-title">\u{1F4F2} Phone via Gateway</div>
+                <div class="dial-card-hint">PSTN / GSM trunk</div>
+              </div>
               <div class="sip-dial-row">
                 <input id="pstn-number-input" class="sip-ext-input" type="text"
                   value="${this._esc(this._pstnDialDraft)}"
@@ -2429,6 +2512,7 @@ class SimsonCard extends HTMLElement {
               </div>
               <div style="font-size:11px;color:#777;margin:-4px 0 10px 2px">
                 Uses gateway trunk ${this._esc(defaultPstnTrunk)}. A leading + is accepted and sent as digits.
+              </div>
               </div>
               ${targets.map(t => `
                 <div class="sip-device${!connected ? " disabled" : ""}"
