@@ -1,7 +1,8 @@
 /**
- * Simson Call Relay — Lovelace Card v4.8.1
+ * Simson Call Relay — Lovelace Card v4.8.2
  *
  * Full WebRTC voice calling between HA instances + Asterisk SIP phone support.
+ * v4.8.2: Harden SIP bridge disconnect cleanup so outside PSTN/GSM callers are not left hanging.
  * v4.8.1: Premium idle dial pad redesign with clearer gateway/SIP controls.
  * v4.8.0: Add SIP/gateway call transfer, targeted transfer ringing, and smoother premium dial controls.
  * v4.7.8: Treat +E.164/long numbers entered in SIP/callback paths as PSTN gateway calls.
@@ -49,7 +50,7 @@
  *     - node_id: office2
  */
 
-const VERSION = "4.8.1";
+const VERSION = "4.8.2";
 
 // Default ICE servers (fallback when /api/webrtc-config is unavailable).
 const ICE_SERVERS = [
@@ -515,6 +516,7 @@ class MinimalSIPUA {
     this._regRetryCount = 0;   // REGISTER retry counter
     this._regRetryMax = 3;     // max retry attempts
     this._regRetryDelay = 1000; // exponential backoff: 1s, 2s, 4s
+    this._intentionalClose = false;
   }
 
   // ── Public API ────────────────────────────────────────────────
@@ -531,10 +533,19 @@ class MinimalSIPUA {
     this._ws.onopen  = () => { console.log("[Simson SIPua] WS open — sending REGISTER"); this._register(); };
     this._ws.onmessage = (e) => { if (!e.data || !e.data.trim()) { console.log("[Simson SIPua] RX: (empty frame — ignored)"); return; } console.log("[Simson SIPua] RX:", e.data.slice(0, 200)); this._handleRaw(e.data); };
     this._ws.onerror = (ev) => { console.error("[Simson SIPua] WS error", ev); this._onError && this._onError(new Error("SIP WebSocket error")); };
-    this._ws.onclose = (ev) => { console.log("[Simson SIPua] WS close", ev.code, ev.reason); this._registered = false; if (this._regInterval) { clearInterval(this._regInterval); this._regInterval = null; } };
+    this._ws.onclose = (ev) => {
+      console.log("[Simson SIPua] WS close", ev.code, ev.reason);
+      const hadActiveCall = !!this._callId;
+      this._registered = false;
+      if (this._regInterval) { clearInterval(this._regInterval); this._regInterval = null; }
+      if (hadActiveCall && !this._intentionalClose) {
+        this._onError && this._onError(new Error("SIP WebSocket closed during active call"));
+      }
+    };
   }
 
   disconnect() {
+    this._intentionalClose = true;
     if (this._registered) this._sendUnregister();
     setTimeout(() => { this._ws && this._ws.close(); }, 400);
     this._cleanup();
@@ -578,6 +589,7 @@ class MinimalSIPUA {
 
   hangup() {
     if (!this._callId) return;
+    this._intentionalClose = true;
     // BYE to the contact we got from 200 OK (or use To fallback)
     const to = "sip:" + this._domain();
     this._send(this._buildRequest("BYE", to, this._callId, this._cseq++));
