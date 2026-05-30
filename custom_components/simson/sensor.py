@@ -136,8 +136,16 @@ class SimsonCallStateSensor(SimsonBaseSensor):
                 "call_type": active.get("call_type", ""),
                 "sip_bridge_id": active.get("sip_bridge_id", ""),
                 "started_at": active.get("started_at", ""),
+                "answered_at": active.get("answered_at", ""),
+                "active_for": active.get("active_for", 0),
                 "target_user_id": active.get("target_user_id", ""),
+                "target_user_name": active.get("target_user_name", ""),
                 "caller_user_id": active.get("caller_user_id", ""),
+                "caller_user_name": active.get("caller_user_name", ""),
+                "answered_by_user_id": active.get("answered_by_user_id", ""),
+                "answered_by_user_name": active.get("answered_by_user_name", ""),
+                "forwarded_to": active.get("forwarded_to", ""),
+                "forwarded_extension": active.get("forwarded_extension", ""),
             }
         return {}
 
@@ -158,4 +166,24 @@ class SimsonActiveCallsSensor(SimsonBaseSensor):
         if not self.coordinator.data:
             return 0
         calls_data = self.coordinator.data.get("calls_data", {})
-        return calls_data.get("total", 0)
+        calls = calls_data.get("calls", [])
+        return len([
+            c for c in calls
+            if c.get("state") in ("requesting", "ringing", "incoming", "active")
+        ])
+
+    @property
+    def extra_state_attributes(self):
+        if not self.coordinator.data:
+            return {}
+        calls_data = self.coordinator.data.get("calls_data", {})
+        calls = calls_data.get("calls", [])
+        active_calls = [
+            c for c in calls
+            if c.get("state") in ("requesting", "ringing", "incoming", "active")
+        ]
+        return {
+            "active_calls": active_calls,
+            "active_call": calls_data.get("active_call"),
+            "total": calls_data.get("total", 0),
+        }

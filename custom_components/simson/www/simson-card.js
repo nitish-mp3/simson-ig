@@ -1,7 +1,9 @@
 /**
- * Simson Call Relay — Lovelace Card v4.8.4
+ * Simson Call Relay — Lovelace Card v4.8.5
  *
  * Full WebRTC voice calling between HA instances + Asterisk SIP phone support.
+ * v4.8.5: First-class SIP/gateway routing targets, SIP transfer shortcuts,
+ *         answered-by ownership filtering, and live active-call context.
  * v4.8.4: Do not let browser SIP bridge join errors/BYE auto-hangup the real
  *         PSTN/GSM call; explicit Hang Up and VPS/Asterisk caller hangup remain authoritative.
  * v4.8.3: Replace idle dial tab with a clearer smart-call composer and larger, easier inputs.
@@ -53,7 +55,7 @@
  *     - node_id: office2
  */
 
-const VERSION = "4.8.4";
+const VERSION = "4.8.5";
 
 // Default ICE servers (fallback when /api/webrtc-config is unavailable).
 const ICE_SERVERS = [
@@ -366,6 +368,25 @@ const STYLES = `
     display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
   }
   .call-dir { display: inline-flex; align-items: center; gap: 4px; }
+  .call-context {
+    display: grid; grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 8px; margin: 10px 0 12px;
+  }
+  .call-context-item {
+    background: #ffffff08; border: 1px solid #ffffff12; border-radius: 12px;
+    padding: 8px 10px; min-width: 0;
+  }
+  .call-context-item span {
+    display: block; color: #8aa0b8; font-size: 9px; text-transform: uppercase;
+    letter-spacing: .7px; font-weight: 800; margin-bottom: 3px;
+  }
+  .call-context-item strong {
+    display: block; color: #f4fbff; font-size: 12px; overflow: hidden;
+    text-overflow: ellipsis; white-space: nowrap;
+  }
+  @media (max-width: 520px) {
+    .call-context { grid-template-columns: 1fr; }
+  }
   .call-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
   .timer {
     font-size: 13px; color: #4fc3f7; font-variant-numeric: tabular-nums;
@@ -391,12 +412,22 @@ const STYLES = `
   .transfer-users {
     display: grid; gap: 6px; margin-top: 8px;
   }
+  .transfer-targets {
+    display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 6px; margin-top: 8px;
+  }
+  @media (max-width: 520px) {
+    .transfer-targets { grid-template-columns: 1fr; }
+    .transfer-row { flex-wrap: wrap; }
+  }
   .transfer-user {
     display: flex; align-items: center; justify-content: space-between; gap: 10px;
     border: 1px solid #ffffff12; background: #ffffff07; color: #f0f7ff;
     border-radius: 11px; padding: 8px 10px; cursor: pointer; text-align: left;
   }
   .transfer-user:hover { background: #4fc3f713; border-color: #4fc3f744; }
+  .transfer-user.sip { border-color: #ff980033; background: #ff6d000d; }
+  .transfer-user.node { border-color: #4fc3f733; }
   .transfer-user small { color: #8aa0b8; display: block; margin-top: 2px; }
   .btn-transfer { background: #0b6e99; color: #fff; }
   .btn-transfer:hover { background: #0d83b8; }
@@ -420,6 +451,24 @@ const STYLES = `
 
   /* Divider */
   .divider { height: 1px; background: #ffffff0a; margin: 16px 0; }
+  .live-board {
+    margin: 10px 0 14px; padding: 10px 12px; border-radius: 14px;
+    border: 1px solid #4fc3f733; background: linear-gradient(135deg, #06202a, #101512);
+  }
+  .live-board-title {
+    color: #8adfff; font-size: 10px; text-transform: uppercase;
+    letter-spacing: .8px; font-weight: 900; margin-bottom: 7px;
+  }
+  .live-board-row {
+    display: grid; grid-template-columns: 1fr 1.3fr auto; gap: 8px;
+    align-items: center; font-size: 11px; color: #9fb1b8; padding: 5px 0;
+    border-top: 1px solid #ffffff0a;
+  }
+  .live-board-row:first-of-type { border-top: 0; }
+  .live-board-row strong {
+    color: #f6fbff; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .live-board-row em { color: #76d79a; font-style: normal; white-space: nowrap; }
 
   /* Status bar */
   .status-bar {
@@ -1503,9 +1552,10 @@ class SimsonCard extends HTMLElement {
   _dialTarget(targetId, targetType, nodeId) {
     this._currentRemoteNode = nodeId || targetId;
     this._callStart = null;
+    const sipTypes = ["asterisk", "sip", "gateway"];
     this._callService("make_call", {
       target_id: targetId,
-      call_type: targetType === "asterisk" ? "sip" : "voice",
+      call_type: sipTypes.includes(targetType) ? "sip" : "voice",
       caller_user_id: this._hass?.user?.id || "",
     });
   }
@@ -2299,10 +2349,13 @@ class SimsonCard extends HTMLElement {
     const myUserId = this._hass?.user?.id || "";
     const targetUserId = this._activeCallAttr("target_user_id", "");
     const callerUserId = this._activeCallAttr("caller_user_id", "");
+    const answeredByUserId = this._activeCallAttr("answered_by_user_id", "");
     const isMyCall = !callId ||
       callId === this._currentCallId ||
       !direction ||
-      (direction === "incoming" && (!targetUserId || targetUserId === myUserId)) ||
+      (direction === "incoming" &&
+        (!targetUserId || targetUserId === myUserId) &&
+        (!answeredByUserId || answeredByUserId === myUserId)) ||
       (direction === "outgoing" && (!callerUserId || callerUserId === myUserId));
     const effectiveCallState = isMyCall ? callState : "idle";
 
@@ -2424,11 +2477,41 @@ class SimsonCard extends HTMLElement {
       }
     }
 
+    const activeCalls = this._attr("calls_count", "active_calls", []) || [];
+    const liveBoardHtml = activeCalls.length ? `
+      <div class="live-board">
+        <div class="live-board-title">Live on this site</div>
+        ${activeCalls.slice(0, 3).map(c => {
+          const who = c.answered_by_user_name || c.answered_by_user_id ||
+            c.target_user_name || c.target_user_id || c.caller_user_id || "site";
+          const route = c.forwarded_extension || c.forwarded_to || c.remote_label || c.remote_node_id || c.call_id;
+          const elapsed = this._formatDuration(Number(c.active_for || 0));
+          return `<div class="live-board-row">
+            <span>${this._esc(who)}</span>
+            <strong>${this._esc(route)}</strong>
+            <em>${this._esc(c.state || "")} · ${this._esc(elapsed)}</em>
+          </div>`;
+        }).join("")}
+      </div>` : "";
+
     // Call panel
     let callPanelHtml = "";
     if (hasCall) {
       const canTransfer = isActive && (activeSipBridgeId || this._sipBridgeId || activeCallType === "sip");
       const transferNodeValue = this._transferNodeDraft || "";
+      const transferTargets = (this._targets || []).filter(t => ["node", "sip", "asterisk"].includes(t.type || "node"));
+      const transferTargetsHtml = canTransfer && transferTargets.length ? `
+        <div class="transfer-targets">
+          ${transferTargets.slice(0, 8).map(t => {
+            const isSip = ["sip", "asterisk"].includes(t.type || "") && !t.trunk;
+            const target = isSip ? `sip:${t.extension || t.id}` : (t.node_id || t.id);
+            const meta = isSip ? `SIP ext. ${t.extension || t.id}` : `Node ${t.node_id || t.id}`;
+            return `<button class="transfer-user ${isSip ? "sip" : "node"}" data-transfer-target="${this._esc(target)}">
+              <span>${this._esc(t.label || t.id)}<small>${this._esc(meta)}</small></span>
+              <span>Send</span>
+            </button>`;
+          }).join("")}
+        </div>` : "";
       const transferUsersHtml = canTransfer && this._transferUsersNode === transferNodeValue.trim()
         ? this._transferUsers.map(u => `
             <button class="transfer-user" data-transfer-uid="${this._esc(u.user_id)}" data-transfer-uname="${this._esc(u.user_name)}">
@@ -2441,18 +2524,35 @@ class SimsonCard extends HTMLElement {
           <div class="transfer-panel">
             <div class="transfer-title">
               <span>Transfer Call</span>
-              <span>${this._esc(this._transferUsersNode || "node/user")}</span>
+              <span>${this._esc(this._transferUsersNode || "node / SIP")}</span>
             </div>
             <div class="transfer-row">
               <input id="transfer-node-input" class="transfer-input" type="text"
-                value="${this._esc(transferNodeValue)}" placeholder="Target node ID"
+                value="${this._esc(transferNodeValue)}" placeholder="Node ID or SIP extension"
                 autocomplete="off" />
               <button class="btn btn-transfer" id="btn-transfer-load">${this._transferLoading ? "Loading" : "Users"}</button>
               <button class="btn btn-transfer" id="btn-transfer-node">Transfer</button>
+              <button class="btn btn-transfer" id="btn-transfer-sip">SIP</button>
             </div>
             ${this._transferLoading ? `<div class="users-loading">Checking users...</div>` : ""}
+            ${transferTargetsHtml}
             ${transferUsersHtml ? `<div class="transfer-users">${transferUsersHtml}</div>` : ""}
           </div>` : "";
+      const answeredBy = this._activeCallAttr("answered_by_user_name", "") ||
+        this._activeCallAttr("answered_by_user_id", "") ||
+        (isActive ? (this._hass?.user?.name || "This dashboard") : "Waiting");
+      const routeTo = this._activeCallAttr("forwarded_extension", "") ||
+        this._activeCallAttr("forwarded_to", "") ||
+        this._activeCallAttr("target_user_name", "") ||
+        this._activeCallAttr("target_user_id", "") ||
+        (activeCallType === "sip" ? "SIP bridge" : "HAOS node");
+      const activeFor = Number(this._activeCallAttr("active_for", 0));
+      const callContextHtml = `
+        <div class="call-context">
+          <div class="call-context-item"><span>Owner</span><strong>${this._esc(answeredBy)}</strong></div>
+          <div class="call-context-item"><span>Route</span><strong>${this._esc(routeTo || "current")}</strong></div>
+          <div class="call-context-item"><span>Live for</span><strong>${this._esc(this._formatDuration(activeFor || 0))}</strong></div>
+        </div>`;
       callPanelHtml = `
         <div class="call-panel ${isIncoming ? "incoming" : ""}">
           <div class="call-who">${this._esc(remoteLabel)}</div>
@@ -2463,6 +2563,7 @@ class SimsonCard extends HTMLElement {
             ${isRinging ? "<span>Calling\u2026</span>" : ""}
             ${qualityHtml}
           </div>
+          ${callContextHtml}
           <div class="call-actions">
             ${isIncoming
               ? `<button class="btn btn-answer" id="btn-answer">\u{1F4DE} Answer</button>
@@ -2596,10 +2697,12 @@ class SimsonCard extends HTMLElement {
       }
 
       // Non-node targets
-      const icons = { device: "\u{1F4F1}", asterisk: "\u{1F4DE}", queue: "\u{1F465}" };
-      const labels = { device: "Devices", asterisk: "Asterisk / SIP", queue: "Queues" };
+      const icons = { device: "\u{1F4F1}", asterisk: "\u{1F4DE}", sip: "\u{1F4DE}", gateway: "\u{1F4F2}", queue: "\u{1F465}" };
+      const labels = { device: "Devices", asterisk: "Asterisk / SIP", sip: "SIP Phones", gateway: "Gateways", queue: "Queues" };
       for (const type of ["asterisk", "device", "queue"]) {
-        const targets = nonNodeTargets.filter(t => t.type === type);
+        const targets = type === "asterisk"
+          ? nonNodeTargets.filter(t => ["asterisk", "sip", "gateway"].includes(t.type || ""))
+          : nonNodeTargets.filter(t => t.type === type);
         if (type !== "asterisk" && targets.length === 0) continue;
 
         if (type === "asterisk") {
@@ -2651,14 +2754,14 @@ class SimsonCard extends HTMLElement {
               </div>
               ${targets.map(t => `
                 <div class="sip-device${!connected ? " disabled" : ""}"
-                  data-tid="${this._esc(t.id)}" data-ttype="asterisk"
+                  data-tid="${this._esc(t.id)}" data-ttype="${this._esc(t.type || "asterisk")}"
                   data-tnodeid="${this._esc(t.node_id || t.id)}">
-                  <div class="sip-icon">${t.icon || "\u{1F4DE}"}</div>
+                  <div class="sip-icon">${t.icon || icons[t.type] || "\u{1F4DE}"}</div>
                   <div class="sip-info">
                     <div class="sip-label">${this._esc(t.label || t.id)}</div>
                     <div class="sip-ext">
-                      ${t.trunk ? "PSTN\u00A0" : "Ext.\u00A0"}${this._esc(t.extension || t.label || t.id)}
-                      \u00A0\u00B7\u00A0${t.trunk ? "Landline via SIP trunk" : "IP Phone / SIP Device"}
+                      ${t.trunk || t.type === "gateway" ? "PSTN\u00A0" : "Ext.\u00A0"}${this._esc(t.extension || t.label || t.id)}
+                      \u00A0\u00B7\u00A0${t.trunk || t.type === "gateway" ? "Landline via SIP trunk" : "IP Phone / SIP Device"}
                       ${t.trunk ? `<span class="sip-route-tag">${this._esc(t.trunk)}</span>` : ""}
                     </div>
                   </div>
@@ -2743,6 +2846,7 @@ class SimsonCard extends HTMLElement {
 
         ${warningHtml}
         ${callPanelHtml}
+        ${liveBoardHtml}
 
         ${isIdle ? notifBanner : ""}
         ${isIdle ? tabsHtml : ""}
@@ -2812,8 +2916,17 @@ class SimsonCard extends HTMLElement {
     root.querySelector("#btn-transfer-node")?.addEventListener("click", () => {
       this._transferCall(transferInput?.value || this._transferNodeDraft);
     });
+    root.querySelector("#btn-transfer-sip")?.addEventListener("click", () => {
+      const ext = String(transferInput?.value || this._transferNodeDraft || "").trim().replace(/^sip:/i, "");
+      if (ext) this._transferCall(`sip:${ext}`);
+    });
     transferInput?.addEventListener("keydown", (e) => {
       if (e.key === "Enter") this._loadTransferUsers(e.target.value);
+    });
+    root.querySelectorAll("[data-transfer-target]").forEach(btn => {
+      btn.addEventListener("click", () => {
+        this._transferCall(btn.dataset.transferTarget || "");
+      });
     });
     root.querySelectorAll("[data-transfer-uid]").forEach(btn => {
       btn.addEventListener("click", () => {
@@ -2962,7 +3075,7 @@ class SimsonCard extends HTMLElement {
     // SIP: device row clicks
     root.querySelectorAll(".sip-device:not(.disabled)").forEach(el => {
       el.addEventListener("click", () => {
-        this._dialTarget(el.dataset.tid, "asterisk", el.dataset.tnodeid || el.dataset.tid);
+        this._dialTarget(el.dataset.tid, el.dataset.ttype || "asterisk", el.dataset.tnodeid || el.dataset.tid);
       });
     });
 
