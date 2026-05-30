@@ -1,7 +1,9 @@
 /**
- * Simson Call Relay — Lovelace Card v4.8.3
+ * Simson Call Relay — Lovelace Card v4.8.4
  *
  * Full WebRTC voice calling between HA instances + Asterisk SIP phone support.
+ * v4.8.4: Do not let browser SIP bridge join errors/BYE auto-hangup the real
+ *         PSTN/GSM call; explicit Hang Up and VPS/Asterisk caller hangup remain authoritative.
  * v4.8.3: Replace idle dial tab with a clearer smart-call composer and larger, easier inputs.
  * v4.8.2: Harden SIP bridge disconnect cleanup so outside PSTN/GSM callers are not left hanging.
  * v4.8.1: Premium idle dial pad redesign with clearer gateway/SIP controls.
@@ -51,7 +53,7 @@
  *     - node_id: office2
  */
 
-const VERSION = "4.8.3";
+const VERSION = "4.8.4";
 
 // Default ICE servers (fallback when /api/webrtc-config is unavailable).
 const ICE_SERVERS = [
@@ -1992,12 +1994,12 @@ class SimsonCard extends HTMLElement {
         console.error("Simson SIP UA error:", e);
         this._pendingSIPBridgeId = null;
         this._cleanupSIPUA();
-        this._endActiveCallFromSip();
+        console.warn("[Simson SIP] Browser bridge error did not hang up the real call; use Hang Up to end it.");
         this._render();
       },
       onBye: () => {
         this._cleanupSIPUA();
-        this._endActiveCallFromSip();
+        console.warn("[Simson SIP] Browser bridge leg ended; waiting for VPS/Asterisk call status.");
         this._render();
       },
     });
