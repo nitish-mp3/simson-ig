@@ -622,9 +622,9 @@ const STYLES = `
 
 class MinimalSIPUA {
   constructor({ uri, password, wsUrl, iceServers, onAudioTrack, onRegistered, onError, onBye }) {
-    this._uri = uri;            // "sip:webrtc-pool@simson-vps.niti.life"
+    this._uri = uri;            // "sip:webrtc-pool@simson-vps.vipsy.in"
     this._password = password;
-    this._wsUrl = wsUrl;        // "wss://simson-vps.niti.life/sip/ws"
+    this._wsUrl = wsUrl;        // "wss://simson-vps.vipsy.in/sip/ws"
     this._iceServers = iceServers || [];
     this._onAudioTrack = onAudioTrack;
     this._onRegistered = onRegistered;
