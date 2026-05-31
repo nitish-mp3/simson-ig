@@ -92,3 +92,15 @@ hangup_call:
       example: "550e8400-e29b-41d4-a716-446655440000"
       selector:
         text:
+
+run_trigger:
+  name: Run Configured Call Trigger
+  description: Run a named call preset configured in the Simson addon panel. Presets can call HAOS nodes, SIP phones, or gateway-backed routes.
+  fields:
+    trigger_id:
+      name: Trigger ID
+      description: The preset ID configured under Automation & Webhook Calls in the Simson addon panel.
+      required: true
+      example: "doorbell_call"
+      selector:
+        text:

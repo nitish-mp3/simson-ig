@@ -28,6 +28,7 @@ Custom integration that pairs with the **Simson addon** to expose call state sen
 | `simson.reject_call` | Reject an incoming call | `call_id` (required), `reason` (optional) |
 | `simson.hangup_call` | End an active call | `call_id` (required) |
 | `simson.transfer_call` | Transfer an active SIP/gateway bridge call to another node/user | `call_id`, `target_node_id`, optional `target_user_id`, `target_user_name` |
+| `simson.run_trigger` | Run an admin-approved call automation preset | `trigger_id`, configured in the addon panel |
 
 ## Events
 
@@ -37,6 +38,7 @@ The addon fires these HA events for automations:
 |-------|-------------|------|
 | `simson_incoming_call` | Incoming call received | `call_id`, `from_node_id`, `from_label`, `call_type` |
 | `simson_call_status` | Call status changed | `call_id`, `status`, `reason`, `direction`, `remote_node_id` |
+| `simson_automation_triggered` | Configured call preset started | `trigger_id`, `target_id`, `source` |
 | `simson_error` | VPS error received | `code`, `message`, `ref` |
 
 ## Lovelace Card
@@ -84,6 +86,15 @@ For GSM/PSTN callback from the card, use **Phone via Gateway**, enter a number l
 During an active SIP/PSTN/GSM bridge call, the Lovelace card shows **Transfer Call**. Enter a target node ID, press **Users** to see active users on that node, then transfer either to the whole node or to one named user. The current browser leg is dismissed only after the new target answers, so the gateway/SIP audio bridge stays alive.
 
 Targeted transfers and direct user calls include `target_user_id` / `target_user_name` in `simson_incoming_call`, so HA automations can route mobile notifications to the intended user even when their dashboard is not open.
+
+Configured presets are the recommended way to place calls from automations. In the addon panel, create a routing target for the destination SIP phone or node, then add an **Automation & Webhook Calls** preset such as `doorbell_call`.
+
+```yaml
+action:
+  - service: simson.run_trigger
+    data:
+      trigger_id: doorbell_call
+```
 
 ## Automation Examples
 

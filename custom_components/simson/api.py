@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from urllib.parse import quote
 
 import aiohttp
 
@@ -103,6 +104,9 @@ class SimsonApiClient:
 
     async def targets(self) -> dict:
         return await self._get("/api/targets")
+
+    async def run_trigger(self, trigger_id: str) -> dict:
+        return await self._post(f"/api/automation/trigger/{quote(trigger_id, safe='')}")
 
     async def webrtc_signal(
         self,

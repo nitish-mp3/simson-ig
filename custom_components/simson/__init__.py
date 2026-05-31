@@ -33,6 +33,7 @@ from .const import (
     SERVICE_USER_HEARTBEAT,
     SERVICE_GET_REMOTE_USERS,
     SERVICE_GET_CALL_HISTORY,
+    SERVICE_RUN_TRIGGER,
 )
 
 logger = logging.getLogger(__name__)
@@ -107,7 +108,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             for svc in (SERVICE_MAKE_CALL, SERVICE_ANSWER_CALL, SERVICE_REJECT_CALL,
                         SERVICE_HANGUP_CALL, SERVICE_WEBRTC_SIGNAL, SERVICE_GET_TARGETS,
                         SERVICE_USER_HEARTBEAT, SERVICE_GET_REMOTE_USERS,
-                        SERVICE_GET_CALL_HISTORY):
+                        SERVICE_GET_CALL_HISTORY, SERVICE_RUN_TRIGGER,
+                        SERVICE_TRANSFER_CALL):
                 hass.services.async_remove(DOMAIN, svc)
     return unload_ok
 
@@ -325,6 +327,24 @@ def _register_services(hass: HomeAssistant, client: SimsonApiClient) -> None:
             DOMAIN,
             SERVICE_GET_TARGETS,
             handle_get_targets,
+        )
+
+    async def handle_run_trigger(call: ServiceCall) -> None:
+        trigger_id = call.data["trigger_id"]
+        try:
+            result = await client.run_trigger(trigger_id)
+            logger.info("Automation trigger initiated: %s", result)
+        except Exception as err:
+            logger.error("Failed to run automation trigger %s: %s", trigger_id, err)
+
+    if not hass.services.has_service(DOMAIN, SERVICE_RUN_TRIGGER):
+        hass.services.async_register(
+            DOMAIN,
+            SERVICE_RUN_TRIGGER,
+            handle_run_trigger,
+            schema=vol.Schema({
+                vol.Required("trigger_id"): str,
+            }),
         )
 
     async def handle_user_heartbeat(call: ServiceCall) -> None:

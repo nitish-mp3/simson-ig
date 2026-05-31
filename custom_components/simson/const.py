@@ -27,6 +27,7 @@ SERVICE_GET_TARGETS = "get_targets"
 SERVICE_USER_HEARTBEAT = "user_heartbeat"
 SERVICE_GET_REMOTE_USERS = "get_remote_users"
 SERVICE_GET_CALL_HISTORY = "get_call_history"
+SERVICE_RUN_TRIGGER = "run_trigger"
 
 # WebRTC event
 EVENT_WEBRTC_SIGNAL = "simson_webrtc_signal"
