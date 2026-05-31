@@ -39,6 +39,7 @@ The addon fires these HA events for automations:
 | `simson_incoming_call` | Incoming call received | `call_id`, `from_node_id`, `from_label`, `call_type` |
 | `simson_call_status` | Call status changed | `call_id`, `status`, `reason`, `direction`, `remote_node_id` |
 | `simson_automation_triggered` | Configured call preset started | `trigger_id`, `target_id`, `source` |
+| `simson_door_station_call` | Outdoor camera SIP bridge started | `trigger_id`, `source_extension`, `target_extension`, `call_id`, `status` |
 | `simson_error` | VPS error received | `code`, `message`, `ref` |
 
 ## Lovelace Card
