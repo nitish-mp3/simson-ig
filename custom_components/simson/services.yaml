@@ -4,8 +4,8 @@ make_call:
   fields:
     target_node_id:
       name: Target Node ID
-      description: The node ID of the destination to call.
-      required: true
+      description: The node ID of the destination to call. Leave blank when using Target ID or Phone Number.
+      required: false
       example: "node-living-room"
       selector:
         text:
@@ -40,6 +40,19 @@ make_call:
       required: false
       default: "7009"
       example: "7009"
+      selector:
+        text:
+    caller_id:
+      name: Caller ID
+      description: Optional caller ID shown to SIP phones/gateways.
+      required: false
+      example: "\"Front Door\" <1602>"
+      selector:
+        text:
+    caller_user_id:
+      name: Caller User ID
+      description: Optional Home Assistant user ID for ownership/busy tracking.
+      required: false
       selector:
         text:
 
@@ -95,7 +108,7 @@ hangup_call:
 
 run_trigger:
   name: Run Configured Call Trigger
-  description: Run a named call preset configured in the Simson addon panel. Presets can call HAOS nodes, SIP phones, or gateway-backed routes.
+  description: Run a named call preset configured in the Simson addon panel. Presets can call one or more HAOS nodes, SIP phones, or gateway-backed routes.
   fields:
     trigger_id:
       name: Trigger ID
