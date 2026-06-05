@@ -5,11 +5,13 @@ Custom integration that pairs with the **Simson addon** to expose call state sen
 ..
 ## Installation
 
-1. Copy the `custom_components/simson/` folder into your HA `config/custom_components/` directory.
-2. Copy `www/simson-call-card.js` into `config/www/`.
-3. Restart Home Assistant.
-4. Go to **Settings → Devices & Services → Add Integration → Simson Call Relay**.
-5. Enter the addon API URL (default: `http://localhost:8099`).
+1. Install/download the Simson Call Relay integration.
+2. Restart Home Assistant.
+3. Go to **Settings -> Devices & Services -> Add Integration -> Simson Call Relay**.
+4. Enter the addon API URL, usually `http://localhost:8099` when the addon runs on the same HAOS instance.
+5. Finish setup and refresh the browser once.
+
+Important: seeing **Simson Call Relay** under **Downloaded** only means the files are installed. The Lovelace card is registered only after the integration is added under **Devices & Services**.
 
 ## Entities
 
@@ -38,23 +40,30 @@ The addon fires these HA events for automations:
 |-------|-------------|------|
 | `simson_incoming_call` | Incoming call received | `call_id`, `from_node_id`, `from_label`, `call_type` |
 | `simson_call_status` | Call status changed | `call_id`, `status`, `reason`, `direction`, `remote_node_id` |
+| `simson_call_event` | Normalized call lifecycle event for automations | `event`, `status`, `direction`, `call_type`, `remote_number`, `sip_extension`, `sip_bridge_id`, `node_id`, `target_user_id` |
 | `simson_automation_triggered` | Configured call preset started | `trigger_id`, `target_id`, `source` |
 | `simson_door_station_call` | Outdoor camera SIP bridge started | `trigger_id`, `source_extension`, `target_extension`, `call_id`, `status` |
 | `simson_error` | VPS error received | `code`, `message`, `ref` |
 
 ## Lovelace Card
 
-Add the card resource in **Settings → Dashboards → Resources**:
+The integration serves and auto-loads the card after the integration is configured. In the card picker, search for **Simson** and choose **Simson Calls** / **Simson Relay Card**.
+
+If the card picker still only shows **Manual**, the frontend has not loaded the card JS yet. Use this fallback:
+
+1. Go to **Settings -> Dashboards -> Resources**.
+2. Add this resource:
 
 ```
-URL: /local/simson-call-card.js
+URL: /simson/www/simson-card.js
 Type: JavaScript Module
 ```
 
-Then add the card to a dashboard:
+3. Hard-refresh the browser, or clear the Home Assistant frontend cache.
+4. Add the card manually with:
 
 ```yaml
-type: custom:simson-call-card
+type: custom:simson-relay-card
 title: Simson Calls
 connection_entity: sensor.simson_mynode_connection
 call_state_entity: sensor.simson_mynode_call_state
@@ -67,6 +76,17 @@ target_nodes:
   - node_id: office
     label: Office
 ```
+
+Legacy aliases `custom:simson-call-card` and `custom:simson-card` are kept for existing dashboards, but new installs should use `custom:simson-relay-card`.
+
+### Card does not appear
+
+Check these in order:
+
+1. **Downloaded is not enough**: add **Simson Call Relay** from **Settings -> Devices & Services -> Add Integration**.
+2. Confirm the addon is running and reachable at the URL entered during setup.
+3. Open `/simson/www/simson-card.js` in the HA browser. If it returns 404, the integration is not loaded.
+4. Add `/simson/www/simson-card.js` as a Dashboard Resource and hard-refresh the browser.
 
 ## SIP Phone / Landline Routing
 
@@ -98,6 +118,32 @@ action:
 ```
 
 ## Automation Examples
+
+### React to any call lifecycle event
+
+Use `simson_call_event` when one automation should handle incoming, outgoing,
+active, ended, failed, missed, forwarded, or fallback-routed calls.
+
+```yaml
+automation:
+  - alias: "Simson — SIP call lifecycle"
+    trigger:
+      - platform: event
+        event_type: simson_call_event
+    condition:
+      - condition: template
+        value_template: "{{ trigger.event.data.event == 'incoming' }}"
+      - condition: template
+        value_template: "{{ trigger.event.data.call_type == 'sip' }}"
+    action:
+      - service: logbook.log
+        data:
+          name: Simson
+          message: >
+            Incoming SIP call from {{ trigger.event.data.remote_number }}
+            on extension {{ trigger.event.data.sip_extension }}
+            for node {{ trigger.event.data.node_id }}.
+```
 
 ### Notify on incoming call
 
