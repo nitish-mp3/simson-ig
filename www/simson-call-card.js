@@ -1,7 +1,9 @@
 /**
- * Simson Call Relay — Lovelace Card v4.8.5
+ * Simson Call Relay — Lovelace Card v4.8.6
  *
  * Full WebRTC voice calling between HA instances + Asterisk SIP phone support.
+ * v4.8.6: Prevent incoming SIP/door bridge active events from auto-answering
+ *         the browser card unless this user pressed Answer.
  * v4.8.5: First-class SIP/gateway routing targets, SIP transfer shortcuts,
  *         answered-by ownership filtering, and live active-call context.
  * v4.8.4: Do not let browser SIP bridge join errors/BYE auto-hangup the real
@@ -55,7 +57,7 @@
  *     - node_id: office2
  */
 
-const VERSION = "4.8.5";
+const VERSION = "4.8.6";
 
 // Default ICE servers (fallback when /api/webrtc-config is unavailable).
 const ICE_SERVERS = [
@@ -1351,6 +1353,18 @@ class SimsonCard extends HTMLElement {
     if (!isMyEvent) return;
     if (status === "active") {
       console.log("[Simson] call_status active", { call_id, call_type, sip_bridge_id, direction, remote_node_id });
+      if (direction === "incoming" && !this._answeredByMe) {
+        console.log("[Simson] Incoming call became active elsewhere; not auto-answering browser card", { call_id });
+        this._stopRingtone();
+        this._removePopup();
+        this._dismissBrowserNotification();
+        this._currentCallId = null;
+        this._currentRemoteNode = null;
+        this._sipBridgeId = null;
+        this._callStart = null;
+        this._render();
+        return;
+      }
       // Clear incoming timeout since call is now active.
       if (this._incomingCallTimeout) {
         clearTimeout(this._incomingCallTimeout);
