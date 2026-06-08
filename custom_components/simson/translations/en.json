@@ -27,6 +27,12 @@
       },
       "calls_count": {
         "name": "Calls Count"
+      },
+      "last_call_event": {
+        "name": "Last Call Event"
+      },
+      "last_automation_event": {
+        "name": "Last Automation Event"
       }
     }
   }

@@ -44,6 +44,8 @@ async def async_setup_entry(
         SimsonConnectionSensor(coordinator, entry),
         SimsonCallStateSensor(coordinator, entry),
         SimsonActiveCallsSensor(coordinator, entry),
+        SimsonLastCallEventSensor(coordinator, entry),
+        SimsonLastAutomationEventSensor(coordinator, entry),
     ]
     async_add_entities(entities, True)
 
@@ -186,4 +188,104 @@ class SimsonActiveCallsSensor(SimsonBaseSensor):
             "active_calls": active_calls,
             "active_call": calls_data.get("active_call"),
             "total": calls_data.get("total", 0),
+        }
+
+
+class SimsonLastCallEventSensor(SimsonBaseSensor):
+    """Managed sensor exposing the latest rich call event for automations."""
+
+    _attr_name = "Last Call Event"
+    _attr_icon = "mdi:phone-in-talk"
+
+    @property
+    def unique_id(self) -> str:
+        return f"{self._entry.entry_id}_last_call_event"
+
+    @property
+    def native_value(self):
+        if not self.coordinator.data:
+            return "unknown"
+        event = self.coordinator.data.get("last_call_event") or {}
+        return event.get("event") or event.get("status") or "unknown"
+
+    @property
+    def extra_state_attributes(self):
+        if not self.coordinator.data:
+            return {}
+        event = self.coordinator.data.get("last_call_event") or {}
+        if not isinstance(event, dict):
+            return {}
+        return {
+            "call_id": event.get("call_id", ""),
+            "status": event.get("status", ""),
+            "direction": event.get("direction", ""),
+            "reason": event.get("reason", ""),
+            "node_id": event.get("node_id", ""),
+            "account_id": event.get("account_id", ""),
+            "remote": event.get("remote", ""),
+            "remote_node_id": event.get("remote_node_id", ""),
+            "remote_label": event.get("remote_label", ""),
+            "call_type": event.get("call_type", ""),
+            "sip_bridge_id": event.get("sip_bridge_id", ""),
+            "sip_extension": event.get("sip_extension", ""),
+            "target_user_id": event.get("target_user_id", ""),
+            "target_user_name": event.get("target_user_name", ""),
+            "caller_user_id": event.get("caller_user_id", ""),
+            "caller_user_name": event.get("caller_user_name", ""),
+            "answered_by_user_id": event.get("answered_by_user_id", ""),
+            "answered_by_user_name": event.get("answered_by_user_name", ""),
+            "forwarded_to": event.get("forwarded_to", ""),
+            "forwarded_extension": event.get("forwarded_extension", ""),
+            "started_at": event.get("started_at", ""),
+            "answered_at": event.get("answered_at", ""),
+            "ended_at": event.get("ended_at", ""),
+        }
+
+
+class SimsonLastAutomationEventSensor(SimsonBaseSensor):
+    """Managed sensor exposing latest door/webhook automation event details."""
+
+    _attr_name = "Last Automation Event"
+    _attr_icon = "mdi:lightning-bolt"
+
+    @property
+    def unique_id(self) -> str:
+        return f"{self._entry.entry_id}_last_automation_event"
+
+    @property
+    def native_value(self):
+        if not self.coordinator.data:
+            return "unknown"
+        event = self.coordinator.data.get("last_automation_event") or {}
+        return event.get("status") or event.get("event") or event.get("event_type") or "unknown"
+
+    @property
+    def extra_state_attributes(self):
+        if not self.coordinator.data:
+            return {}
+        event = self.coordinator.data.get("last_automation_event") or {}
+        if not isinstance(event, dict):
+            return {}
+        return {
+            "event_type": event.get("event_type", ""),
+            "trigger_id": event.get("trigger_id", ""),
+            "label": event.get("label", ""),
+            "status": event.get("status", ""),
+            "phase": event.get("phase", ""),
+            "reason": event.get("reason", ""),
+            "node_id": event.get("node_id", ""),
+            "account_id": event.get("account_id", ""),
+            "source": event.get("source", ""),
+            "source_extension": event.get("source_extension", ""),
+            "target_id": event.get("target_id", ""),
+            "target_ids": event.get("target_ids", []),
+            "targets": event.get("targets", []),
+            "target_node_id": event.get("target_node_id", ""),
+            "target_sip_extension": event.get("target_sip_extension", ""),
+            "target_sip_extensions": event.get("target_sip_extensions", []),
+            "media_mode": event.get("media_mode", ""),
+            "fanout_mode": event.get("fanout_mode", ""),
+            "call_id": event.get("call_id", ""),
+            "bridge_id": event.get("bridge_id", ""),
+            "retry_after": event.get("retry_after", ""),
         }

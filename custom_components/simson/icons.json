@@ -10,6 +10,12 @@
       },
       "calls_count": {
         "default": "mdi:phone-log"
+      },
+      "last_call_event": {
+        "default": "mdi:phone-in-talk"
+      },
+      "last_automation_event": {
+        "default": "mdi:lightning-bolt"
       }
     }
   }
