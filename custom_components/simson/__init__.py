@@ -10,7 +10,7 @@ import voluptuous as vol
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
-from homeassistant.core import HomeAssistant, ServiceCall
+from homeassistant.core import Event, HomeAssistant, ServiceCall, callback
 from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.components.http import HomeAssistantView, StaticPathConfig
@@ -86,6 +86,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
         # Expose /api/webrtc-config so the Lovelace card can fetch SIP credentials.
         hass.http.register_view(WebRTCConfigView(client))
+        _register_mobile_notification_actions(hass, entry, client)
 
     except Exception:
         await client.close()
@@ -103,6 +104,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         data = hass.data[DOMAIN].pop(entry.entry_id, None)
         if data and "client" in data:
             await data["client"].close()
+        if data and data.get("notification_unsub"):
+            data["notification_unsub"]()
         # Unregister services when last entry is removed.
         if not hass.data[DOMAIN]:
             for svc in (SERVICE_MAKE_CALL, SERVICE_ANSWER_CALL, SERVICE_REJECT_CALL,
@@ -401,3 +404,24 @@ def _register_services(hass: HomeAssistant, client: SimsonApiClient) -> None:
                 vol.Optional("limit", default=50): int,
             }),
         )
+
+
+def _register_mobile_notification_actions(
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    client: SimsonApiClient,
+) -> None:
+    """Handle HA Companion actionable notification buttons for Simson calls."""
+
+    @callback
+    def _handle_action_event(event: Event) -> None:
+        action = str(event.data.get("action") or "").strip()
+        if action.startswith("SIMSON_ANSWER_"):
+            call_id = action.removeprefix("SIMSON_ANSWER_")
+            hass.async_create_task(client.answer_call(call_id))
+        elif action.startswith("SIMSON_DECLINE_"):
+            call_id = action.removeprefix("SIMSON_DECLINE_")
+            hass.async_create_task(client.reject_call(call_id, "declined_from_notification"))
+
+    unsub = hass.bus.async_listen("mobile_app_notification_action", _handle_action_event)
+    hass.data.setdefault(DOMAIN, {}).setdefault(entry.entry_id, {})["notification_unsub"] = unsub
