@@ -40,7 +40,7 @@ logger = logging.getLogger(__name__)
 
 SCAN_INTERVAL = timedelta(seconds=5)
 _CARD_JS_PATH = "/simson/www/simson-card.js"
-_CARD_URL = f"{_CARD_JS_PATH}?v=4.8.6"
+_CARD_URL = f"{_CARD_JS_PATH}?v=4.8.7"
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:

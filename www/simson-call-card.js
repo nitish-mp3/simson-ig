@@ -1,8 +1,8 @@
 /**
- * Simson Call Relay — Lovelace Card v4.8.6
+ * Simson Call Relay — Lovelace Card v4.8.7
  *
  * Full WebRTC voice calling between HA instances + Asterisk SIP phone support.
- * v4.8.6: Prevent incoming SIP/door bridge active events from auto-answering
+ * v4.8.7: Guard call action buttons against double-fire and render-time missed clicks.
  *         the browser card unless this user pressed Answer.
  * v4.8.5: First-class SIP/gateway routing targets, SIP transfer shortcuts,
  *         answered-by ownership filtering, and live active-call context.
@@ -57,7 +57,7 @@
  *     - node_id: office2
  */
 
-const VERSION = "4.8.6";
+const VERSION = "4.8.7";
 
 // Default ICE servers (fallback when /api/webrtc-config is unavailable).
 const ICE_SERVERS = [
@@ -1195,6 +1195,12 @@ class SimsonCard extends HTMLElement {
 
     // User heartbeat
     this._userHeartbeatInterval = null;
+
+    // UI action guard. Home Assistant can re-render this card while a service
+    // call is still in flight; short locks keep taps responsive without
+    // double-firing answer/hangup/dial actions.
+    this._actionLocks = new Set();
+    this._lastActionAt = {};
   }
 
   // ── Config ──────────────────────────────────────────────────────────
@@ -1549,6 +1555,33 @@ class SimsonCard extends HTMLElement {
     if (!this._hass) return;
     await this._hass.callService("simson", service, data);
     setTimeout(() => this._render(), 600);
+  }
+
+  async _runAction(key, fn, minMs = 650) {
+    const actionKey = String(key || "action");
+    const now = Date.now();
+    if (this._actionLocks.has(actionKey)) return;
+    if (now - (this._lastActionAt[actionKey] || 0) < minMs) return;
+    this._lastActionAt[actionKey] = now;
+    this._actionLocks.add(actionKey);
+    try {
+      await Promise.resolve(fn());
+    } catch (err) {
+      console.error("[Simson] action failed:", actionKey, err);
+    } finally {
+      setTimeout(() => this._actionLocks.delete(actionKey), minMs);
+    }
+  }
+
+  _bindAction(el, key, fn, minMs = 650) {
+    if (!el) return;
+    const handler = (ev) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      this._runAction(key, fn, minMs);
+    };
+    el.addEventListener("pointerup", handler);
+    el.addEventListener("click", handler);
   }
 
   _dial(nodeId, targetUserId, targetUserName) {
@@ -2191,8 +2224,8 @@ class SimsonCard extends HTMLElement {
     `;
     document.body.appendChild(popup);
     this._popupEl = popup;
-    popup.querySelector("#popup-answer")?.addEventListener("click", () => { this._answer(); this._removePopup(); });
-    popup.querySelector("#popup-decline")?.addEventListener("click", () => { this._reject(); this._removePopup(); });
+    this._bindAction(popup.querySelector("#popup-answer"), "popup-answer", () => { this._answer(); this._removePopup(); });
+    this._bindAction(popup.querySelector("#popup-decline"), "popup-decline", () => { this._reject(); this._removePopup(); });
   }
 
   _removePopup() {
@@ -2914,23 +2947,23 @@ class SimsonCard extends HTMLElement {
     root.innerHTML = html;
 
     // Bind events
-    root.querySelector("#btn-answer")?.addEventListener("click", () => this._answer());
-    root.querySelector("#btn-reject")?.addEventListener("click", () => this._reject());
-    root.querySelector("#btn-hangup")?.addEventListener("click", () => this._hangup());
-    root.querySelector("#btn-mute")?.addEventListener("click", () => this._toggleMute());
-    root.querySelector("#btn-notif-perm")?.addEventListener("click", () => this._requestNotificationPermission());
+    this._bindAction(root.querySelector("#btn-answer"), "answer", () => this._answer());
+    this._bindAction(root.querySelector("#btn-reject"), "reject", () => this._reject());
+    this._bindAction(root.querySelector("#btn-hangup"), "hangup", () => this._hangup());
+    this._bindAction(root.querySelector("#btn-mute"), "mute", () => this._toggleMute(), 250);
+    this._bindAction(root.querySelector("#btn-notif-perm"), "notif-perm", () => this._requestNotificationPermission());
 
     const transferInput = root.querySelector("#transfer-node-input");
     transferInput?.addEventListener("input", (e) => {
       this._transferNodeDraft = e.target.value;
     });
-    root.querySelector("#btn-transfer-load")?.addEventListener("click", () => {
+    this._bindAction(root.querySelector("#btn-transfer-load"), "transfer-load", () => {
       this._loadTransferUsers(transferInput?.value || this._transferNodeDraft);
     });
-    root.querySelector("#btn-transfer-node")?.addEventListener("click", () => {
+    this._bindAction(root.querySelector("#btn-transfer-node"), "transfer-node", () => {
       this._transferCall(transferInput?.value || this._transferNodeDraft);
     });
-    root.querySelector("#btn-transfer-sip")?.addEventListener("click", () => {
+    this._bindAction(root.querySelector("#btn-transfer-sip"), "transfer-sip", () => {
       const ext = String(transferInput?.value || this._transferNodeDraft || "").trim().replace(/^sip:/i, "");
       if (ext) this._transferCall(`sip:${ext}`);
     });
@@ -2938,12 +2971,12 @@ class SimsonCard extends HTMLElement {
       if (e.key === "Enter") this._loadTransferUsers(e.target.value);
     });
     root.querySelectorAll("[data-transfer-target]").forEach(btn => {
-      btn.addEventListener("click", () => {
+      this._bindAction(btn, `transfer-target:${btn.dataset.transferTarget || ""}`, () => {
         this._transferCall(btn.dataset.transferTarget || "");
       });
     });
     root.querySelectorAll("[data-transfer-uid]").forEach(btn => {
-      btn.addEventListener("click", () => {
+      this._bindAction(btn, `transfer-user:${btn.dataset.transferUid || ""}`, () => {
         this._transferCall(this._transferUsersNode || this._transferNodeDraft, btn.dataset.transferUid, btn.dataset.transferUname);
       });
     });
@@ -3005,7 +3038,7 @@ class SimsonCard extends HTMLElement {
     }
 
     // Manual call button
-    root.querySelector("#btn-call-manual")?.addEventListener("click", () => {
+    this._bindAction(root.querySelector("#btn-call-manual"), "call-manual", () => {
       const val = root.querySelector("#node-input")?.value?.trim();
       if (val) {
         this._nodeInputDraft = val;
@@ -3017,17 +3050,17 @@ class SimsonCard extends HTMLElement {
     });
 
     // User items
-    root.querySelector("[data-action='call-all']")?.addEventListener("click", () => {
+    this._bindAction(root.querySelector("[data-action='call-all']"), "call-all-users", () => {
       this._dial(this._selectedNode);
     });
     root.querySelectorAll(".user-item[data-uid]").forEach(item => {
-      item.addEventListener("click", () => {
+      this._bindAction(item, `call-user:${item.dataset.uid || ""}`, () => {
         this._dial(this._selectedNode, item.dataset.uid, item.dataset.uname);
       });
     });
 
     // Refresh users button
-    root.querySelector("#btn-refresh-users")?.addEventListener("click", () => {
+    this._bindAction(root.querySelector("#btn-refresh-users"), "refresh-users", () => {
       if (this._selectedNode) {
         this._usersCache[this._selectedNode] = null;
         this._usersLoading = true;
@@ -3049,7 +3082,7 @@ class SimsonCard extends HTMLElement {
         this._dialSIPExtension(ext);
       }
     };
-    sipCallBtn?.addEventListener("click", doSipDial);
+    this._bindAction(sipCallBtn, "dial-sip", doSipDial);
     sipInput?.addEventListener("keydown", e => { if (e.key === "Enter") doSipDial(); });
     if (wasSipInputFocused && sipInput) {
       sipInput.focus();
@@ -3075,7 +3108,7 @@ class SimsonCard extends HTMLElement {
         this._dialPSTNNumber(number, trunk);
       }
     };
-    pstnCallBtn?.addEventListener("click", doPstnDial);
+    this._bindAction(pstnCallBtn, "dial-pstn", doPstnDial);
     pstnInput?.addEventListener("keydown", e => { if (e.key === "Enter") doPstnDial(); });
     pstnTrunkInput?.addEventListener("keydown", e => { if (e.key === "Enter") doPstnDial(); });
     if (wasPstnInputFocused && pstnInput) {
@@ -3088,14 +3121,14 @@ class SimsonCard extends HTMLElement {
 
     // SIP: device row clicks
     root.querySelectorAll(".sip-device:not(.disabled)").forEach(el => {
-      el.addEventListener("click", () => {
+      this._bindAction(el, `dial-target:${el.dataset.tid || ""}`, () => {
         this._dialTarget(el.dataset.tid, el.dataset.ttype || "asterisk", el.dataset.tnodeid || el.dataset.tid);
       });
     });
 
     // Target buttons (device, queue, node)
     root.querySelectorAll(".btn-target").forEach(btn => {
-      btn.addEventListener("click", () => {
+      this._bindAction(btn, `dial-target:${btn.dataset.tid || ""}`, () => {
         const tid = btn.dataset.tid;
         const ttype = btn.dataset.ttype;
         const tnodeid = btn.dataset.tnodeid || tid;
@@ -3111,8 +3144,7 @@ class SimsonCard extends HTMLElement {
 
     // History callback buttons
     root.querySelectorAll(".history-callback").forEach(btn => {
-      btn.addEventListener("click", (e) => {
-        e.stopPropagation();
+      this._bindAction(btn, `history-callback:${btn.dataset.callback || ""}`, () => {
         const nodeId = btn.dataset.callback;
         if (nodeId) {
           if (nodeId.startsWith("sip:") || nodeId.startsWith("asterisk:")) {
