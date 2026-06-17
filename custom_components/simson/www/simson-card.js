@@ -1,7 +1,9 @@
 /**
- * Simson Call Relay — Lovelace Card v4.8.7
+ * Simson Call Relay — Lovelace Card v4.8.8
  *
  * Full WebRTC voice calling between HA instances + Asterisk SIP phone support.
+ * v4.8.8: Professional compact UI refresh: calmer visual system, tighter
+ *         responsive dial/call surfaces, and clearer live call hierarchy.
  * v4.8.7: Guard call action buttons against double-fire and render-time missed clicks.
  *         the browser card unless this user pressed Answer.
  * v4.8.5: First-class SIP/gateway routing targets, SIP transfer shortcuts,
@@ -57,7 +59,7 @@
  *     - node_id: office2
  */
 
-const VERSION = "4.8.7";
+const VERSION = "4.8.8";
 
 // Default ICE servers (fallback when /api/webrtc-config is unavailable).
 const ICE_SERVERS = [
@@ -609,6 +611,614 @@ const STYLES = `
     .dial-action { width: 100%; }
     .sip-dial-row { flex-wrap: wrap; }
     .sip-ext-btn { flex: 1 0 96px; }
+  }
+
+  /* v4.8.8 professional UI pass: compact, calmer, faster to scan. */
+  :host {
+    --simson-bg: #0f1312;
+    --simson-panel: rgba(18, 25, 23, .88);
+    --simson-panel-2: rgba(25, 31, 28, .78);
+    --simson-line: rgba(218, 226, 220, .12);
+    --simson-line-strong: rgba(218, 226, 220, .2);
+    --simson-text: #f1f4ef;
+    --simson-muted: #99a39c;
+    --simson-faint: #68736c;
+    --simson-accent: #18b98f;
+    --simson-accent-2: #2aa6c8;
+    --simson-warn: #f28c38;
+    --simson-danger: #e5484d;
+    --simson-radius: 18px;
+    --simson-radius-sm: 12px;
+    --simson-shadow: 0 18px 55px rgba(0, 0, 0, .34);
+    color-scheme: dark;
+  }
+
+  .card,
+  .card * {
+    text-shadow: none !important;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: geometricPrecision;
+  }
+
+  .card {
+    max-width: 760px;
+    margin: 0 auto;
+    padding: 18px;
+    color: var(--simson-text);
+    background:
+      linear-gradient(135deg, rgba(24, 185, 143, .10), transparent 28%),
+      linear-gradient(235deg, rgba(242, 140, 56, .09), transparent 31%),
+      linear-gradient(180deg, #151917 0%, var(--simson-bg) 100%);
+    border: 1px solid var(--simson-line);
+    border-radius: 24px;
+    box-shadow: var(--simson-shadow);
+  }
+
+  .card::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    opacity: .32;
+    background:
+      linear-gradient(rgba(255,255,255,.018) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255,255,255,.014) 1px, transparent 1px);
+    background-size: 18px 18px;
+    mask-image: linear-gradient(to bottom, #000 0%, transparent 88%);
+  }
+
+  .card > * {
+    position: relative;
+    z-index: 1;
+  }
+
+  .header {
+    gap: 12px;
+    margin-bottom: 14px;
+  }
+
+  .header-icon {
+    width: 42px;
+    height: 42px;
+    border-radius: 14px;
+    background: linear-gradient(135deg, rgba(24,185,143,.28), rgba(42,166,200,.12));
+    border-color: rgba(24,185,143,.22);
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.08);
+  }
+
+  .header-title {
+    font-size: 18px;
+    font-weight: 760;
+    letter-spacing: -.35px;
+  }
+
+  .badge {
+    padding: 5px 10px;
+    border-radius: 999px;
+    font-size: 10px;
+    letter-spacing: .75px;
+  }
+
+  .badge-ok {
+    color: #b8f4d8;
+    background: rgba(22, 119, 73, .42);
+    border-color: rgba(90, 220, 151, .28);
+  }
+
+  .badge-err {
+    color: #ffd1d2;
+    background: rgba(128, 30, 34, .42);
+    border-color: rgba(229, 72, 77, .28);
+  }
+
+  .tabs {
+    padding: 4px;
+    gap: 4px;
+    margin-bottom: 14px;
+    border-radius: 14px;
+    background: rgba(255,255,255,.045);
+    border-color: var(--simson-line);
+  }
+
+  .tab {
+    border-radius: 11px;
+    padding: 9px 10px;
+    color: var(--simson-muted);
+    font-size: 11px;
+    font-weight: 760;
+  }
+
+  .tab.active {
+    background: linear-gradient(135deg, rgba(24,185,143,.92), rgba(31,122,145,.86));
+    color: #ffffff;
+    box-shadow: 0 10px 24px rgba(24,185,143,.16);
+  }
+
+  .dial-shell {
+    padding: 14px;
+    margin-bottom: 14px;
+    border-radius: 20px;
+    background: linear-gradient(145deg, rgba(13, 31, 29, .84), rgba(26, 22, 18, .76));
+    border-color: var(--simson-line);
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.045);
+  }
+
+  .dial-shell::before {
+    opacity: .22;
+  }
+
+  .dial-hero {
+    margin-bottom: 12px;
+    align-items: center;
+  }
+
+  .dial-eyebrow {
+    color: #65d6bd;
+    font-size: 9px;
+    letter-spacing: 1.15px;
+  }
+
+  .dial-title {
+    font-size: 17px;
+    font-weight: 820;
+    letter-spacing: -.25px;
+  }
+
+  .dial-subtitle {
+    max-width: 460px;
+    color: var(--simson-muted);
+    font-size: 11.5px;
+    line-height: 1.45;
+  }
+
+  .dial-pill {
+    border-color: rgba(101,214,189,.18);
+    background: rgba(101,214,189,.09);
+    color: #b8fff1;
+  }
+
+  .route-mode-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 7px;
+    margin-bottom: 12px;
+  }
+
+  .route-mode {
+    min-height: 92px;
+    padding: 10px;
+    border-radius: 15px;
+    background: rgba(255,255,255,.035);
+    border-color: var(--simson-line);
+  }
+
+  .route-mode-icon {
+    width: 28px;
+    height: 28px;
+    margin-bottom: 7px;
+    border-radius: 10px;
+    background: rgba(255,255,255,.055);
+  }
+
+  .route-mode strong {
+    color: var(--simson-text);
+    font-size: 12px;
+    font-weight: 760;
+  }
+
+  .route-mode span {
+    color: var(--simson-faint);
+    font-size: 10.5px;
+  }
+
+  .route-mode:hover {
+    border-color: rgba(24,185,143,.32);
+    background: rgba(24,185,143,.075);
+  }
+
+  .call-form-card {
+    padding: 13px;
+    margin-bottom: 10px;
+    border-radius: 18px;
+    background: var(--simson-panel);
+    border-color: var(--simson-line);
+  }
+
+  .call-form-card.node-card {
+    background: linear-gradient(145deg, rgba(18, 54, 47, .48), rgba(19, 25, 23, .84));
+    border-color: rgba(24,185,143,.18);
+  }
+
+  .call-form-card.sip-card {
+    background: linear-gradient(145deg, rgba(20, 47, 62, .45), rgba(19, 25, 23, .84));
+    border-color: rgba(42,166,200,.18);
+  }
+
+  .call-form-card.gateway-card {
+    background: linear-gradient(145deg, rgba(67, 38, 18, .42), rgba(19, 25, 23, .84));
+    border-color: rgba(242,140,56,.20);
+  }
+
+  .route-title-row {
+    margin-bottom: 9px;
+  }
+
+  .route-kicker,
+  .section-label,
+  .live-board-title {
+    color: #7edfc9;
+    font-size: 9px;
+    font-weight: 850;
+    letter-spacing: 1px;
+  }
+
+  .route-name {
+    color: var(--simson-text);
+    font-size: 14px;
+    font-weight: 780;
+  }
+
+  .route-copy {
+    color: var(--simson-muted);
+    font-size: 11px;
+  }
+
+  .route-number {
+    width: 28px;
+    height: 28px;
+    border-radius: 999px;
+    color: #dffdf7;
+    background: rgba(255,255,255,.055);
+    border-color: var(--simson-line);
+    font-size: 11px;
+  }
+
+  .dial-field,
+  .sip-ext-input,
+  .transfer-input {
+    min-height: 48px;
+    border-radius: 13px;
+    background: rgba(3, 8, 7, .52);
+    border-color: var(--simson-line-strong);
+    color: var(--simson-text);
+  }
+
+  .dial-field {
+    padding: 9px 12px;
+  }
+
+  .dial-field span {
+    color: var(--simson-muted);
+    font-size: 9px;
+  }
+
+  .dial-field input {
+    color: var(--simson-text);
+    font-size: 15px;
+    line-height: 1.4;
+  }
+
+  .dial-field:focus-within,
+  .sip-ext-input:focus,
+  .transfer-input:focus {
+    border-color: rgba(24,185,143,.62);
+    box-shadow: 0 0 0 3px rgba(24,185,143,.12);
+  }
+
+  .gateway-input-grid {
+    grid-template-columns: minmax(0, 1fr) 92px auto;
+    gap: 8px;
+  }
+
+  .dial-action,
+  .sip-ext-btn,
+  .btn,
+  .btn-target,
+  .history-callback,
+  .btn-refresh,
+  .transfer-user {
+    touch-action: manipulation;
+  }
+
+  .dial-action,
+  .sip-ext-btn {
+    min-height: 48px;
+    border-radius: 13px;
+    padding: 0 16px;
+    font-size: 12px;
+    font-weight: 820;
+    box-shadow: none;
+  }
+
+  .dial-action {
+    background: linear-gradient(135deg, #16a36f, #18b98f);
+  }
+
+  .sip-ext-btn {
+    background: linear-gradient(135deg, #ed7d2d, #f28c38);
+  }
+
+  .mini-help {
+    color: var(--simson-faint);
+    font-size: 10.5px;
+  }
+
+  .target-section {
+    margin-bottom: 12px;
+  }
+
+  .target-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(118px, 1fr));
+    gap: 8px;
+  }
+
+  .btn-target {
+    min-width: 0;
+    padding: 11px;
+    border-radius: 14px;
+    color: var(--simson-text);
+    background: var(--simson-panel);
+    border-color: var(--simson-line);
+  }
+
+  .btn-target .target-icon {
+    font-size: 18px;
+  }
+
+  .btn-target .target-label {
+    font-size: 11px;
+    color: var(--simson-muted);
+  }
+
+  .sip-device,
+  .user-item,
+  .history-item {
+    border-radius: 14px;
+    background: rgba(255,255,255,.035);
+    border-color: var(--simson-line);
+  }
+
+  .sip-device {
+    padding: 10px 12px;
+    margin-bottom: 7px;
+  }
+
+  .sip-device:hover,
+  .user-item:hover,
+  .transfer-user:hover {
+    background: rgba(24,185,143,.08);
+    border-color: rgba(24,185,143,.24);
+  }
+
+  .sip-device .sip-icon,
+  .user-item .user-avatar,
+  .history-icon {
+    background: rgba(255,255,255,.055);
+    border-radius: 12px;
+  }
+
+  .sip-device .sip-label,
+  .user-item .user-name,
+  .history-name {
+    color: var(--simson-text);
+    font-weight: 720;
+  }
+
+  .sip-device .sip-ext,
+  .user-item .user-meta,
+  .history-detail,
+  .history-time {
+    color: var(--simson-muted);
+  }
+
+  .sip-route-tag {
+    color: #ffd9aa;
+    background: rgba(242,140,56,.12);
+    border-color: rgba(242,140,56,.22);
+  }
+
+  .call-panel {
+    padding: 16px;
+    border-radius: 20px;
+    margin-bottom: 14px;
+    background:
+      linear-gradient(135deg, rgba(42,166,200,.12), rgba(24,185,143,.08)),
+      rgba(13, 24, 31, .84);
+    border-color: rgba(83, 170, 203, .22);
+  }
+
+  .call-panel.incoming {
+    background:
+      linear-gradient(135deg, rgba(24,185,143,.16), rgba(24, 30, 26, .84)),
+      rgba(14, 26, 20, .88);
+    border-color: rgba(24,185,143,.34);
+    animation: simson-subtle-ring 2.4s ease-in-out infinite;
+  }
+
+  @keyframes simson-subtle-ring {
+    0%, 100% { box-shadow: inset 0 0 0 1px rgba(24,185,143,.02), 0 0 0 rgba(24,185,143,0); }
+    50% { box-shadow: inset 0 0 0 1px rgba(24,185,143,.20), 0 0 28px rgba(24,185,143,.10); }
+  }
+
+  .call-who {
+    font-size: 22px;
+    font-weight: 820;
+    letter-spacing: -.35px;
+    margin-bottom: 4px;
+  }
+
+  .call-meta {
+    color: var(--simson-muted);
+    margin-bottom: 10px;
+  }
+
+  .call-context {
+    gap: 8px;
+  }
+
+  .call-context-item {
+    padding: 9px 10px;
+    border-radius: 14px;
+    background: rgba(255,255,255,.045);
+    border-color: var(--simson-line);
+  }
+
+  .call-context-item span {
+    color: #8fb8c8;
+    font-size: 9px;
+  }
+
+  .call-context-item strong {
+    font-size: 12px;
+    font-weight: 760;
+  }
+
+  .call-actions {
+    gap: 8px;
+  }
+
+  .btn {
+    border-radius: 12px;
+    padding: 10px 14px;
+    font-weight: 780;
+  }
+
+  .btn-answer {
+    background: linear-gradient(135deg, #14795a, #18b98f);
+  }
+
+  .btn-hangup,
+  .btn-reject {
+    background: linear-gradient(135deg, #c9353c, #e5484d);
+  }
+
+  .btn-mute,
+  .btn-transfer {
+    border: 1px solid var(--simson-line);
+    background: rgba(255,255,255,.055);
+  }
+
+  .btn-transfer:hover,
+  .btn-mute:hover {
+    background: rgba(42,166,200,.13);
+  }
+
+  .transfer-panel {
+    border-top-color: var(--simson-line);
+  }
+
+  .transfer-title {
+    color: #9edff2;
+  }
+
+  .transfer-user {
+    border-radius: 13px;
+    background: rgba(255,255,255,.04);
+    border-color: var(--simson-line);
+  }
+
+  .live-board {
+    margin: 8px 0 13px;
+    padding: 11px 12px;
+    border-radius: 16px;
+    background: rgba(12, 30, 30, .62);
+    border-color: rgba(24,185,143,.22);
+  }
+
+  .live-board-row {
+    grid-template-columns: minmax(80px, .9fr) minmax(110px, 1.4fr) auto;
+    color: var(--simson-muted);
+    font-size: 11px;
+  }
+
+  .live-board-row em {
+    color: #a2efc8;
+  }
+
+  .notif-banner,
+  .warning-box {
+    border-radius: 14px;
+    padding: 10px 12px;
+  }
+
+  .history-item {
+    padding: 10px;
+    margin-bottom: 7px;
+    border-bottom: 0;
+  }
+
+  .history-callback {
+    border-color: var(--simson-line);
+    color: var(--simson-text);
+  }
+
+  .divider {
+    margin: 14px 0;
+    background: var(--simson-line);
+  }
+
+  .status-bar {
+    color: var(--simson-faint);
+  }
+
+  @media (min-width: 700px) {
+    .call-panel {
+      padding: 18px;
+    }
+    .call-actions {
+      min-height: 48px;
+    }
+  }
+
+  @media (max-width: 620px) {
+    .card {
+      max-width: none;
+      padding: 14px;
+      border-radius: 20px;
+    }
+    .header {
+      margin-bottom: 12px;
+    }
+    .dial-hero {
+      align-items: flex-start;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .dial-subtitle {
+      max-width: none;
+    }
+    .route-mode-grid {
+      grid-template-columns: 1fr;
+    }
+    .route-mode {
+      min-height: 0;
+      display: grid;
+      grid-template-columns: 32px 1fr;
+      gap: 8px 10px;
+      align-items: center;
+    }
+    .route-mode-icon {
+      grid-row: span 2;
+      margin: 0;
+    }
+    .route-mode span {
+      margin-top: -4px;
+    }
+    .gateway-input-grid,
+    .dial-grid,
+    .sip-dial-row {
+      grid-template-columns: 1fr;
+      display: grid;
+    }
+    .sip-ext-btn,
+    .dial-action {
+      width: 100%;
+    }
+    .call-context,
+    .transfer-targets,
+    .live-board-row {
+      grid-template-columns: 1fr;
+    }
   }
 `;
 
