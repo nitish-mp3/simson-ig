@@ -135,8 +135,16 @@ class SimsonCallStateSensor(SimsonBaseSensor):
                 "direction": active.get("direction", ""),
                 "remote_node_id": active.get("remote_node_id", ""),
                 "remote_label": active.get("remote_label", ""),
+                "remote_number": active.get("remote_number", ""),
                 "call_type": active.get("call_type", ""),
                 "sip_bridge_id": active.get("sip_bridge_id", ""),
+                "source_extension": active.get("source_extension", ""),
+                "target_extension": active.get("target_extension", ""),
+                "source_auto_mode": active.get("source_auto_mode", ""),
+                "target_auto_mode": active.get("target_auto_mode", ""),
+                "target_id": active.get("target_id", ""),
+                "target_type": active.get("target_type", ""),
+                "target_label": active.get("target_label", ""),
                 "started_at": active.get("started_at", ""),
                 "answered_at": active.get("answered_at", ""),
                 "active_for": active.get("active_for", 0),
@@ -169,10 +177,13 @@ class SimsonActiveCallsSensor(SimsonBaseSensor):
             return 0
         calls_data = self.coordinator.data.get("calls_data", {})
         calls = calls_data.get("calls", [])
-        return len([
+        active_count = len([
             c for c in calls
             if c.get("state") in ("requesting", "ringing", "incoming", "active")
         ])
+        if active_count == 0 and calls_data.get("active_call"):
+            return 1
+        return active_count
 
     @property
     def extra_state_attributes(self):
@@ -228,6 +239,13 @@ class SimsonLastCallEventSensor(SimsonBaseSensor):
             "call_type": event.get("call_type", ""),
             "sip_bridge_id": event.get("sip_bridge_id", ""),
             "sip_extension": event.get("sip_extension", ""),
+            "source_extension": event.get("source_extension", ""),
+            "target_extension": event.get("target_extension", ""),
+            "source_auto_mode": event.get("source_auto_mode", ""),
+            "target_auto_mode": event.get("target_auto_mode", ""),
+            "target_id": event.get("target_id", ""),
+            "target_type": event.get("target_type", ""),
+            "target_label": event.get("target_label", ""),
             "target_user_id": event.get("target_user_id", ""),
             "target_user_name": event.get("target_user_name", ""),
             "caller_user_id": event.get("caller_user_id", ""),
@@ -277,6 +295,9 @@ class SimsonLastAutomationEventSensor(SimsonBaseSensor):
             "account_id": event.get("account_id", ""),
             "source": event.get("source", ""),
             "source_extension": event.get("source_extension", ""),
+            "target_extension": event.get("target_extension", ""),
+            "source_auto_mode": event.get("source_auto_mode", ""),
+            "target_auto_mode": event.get("target_auto_mode", ""),
             "target_id": event.get("target_id", ""),
             "target_ids": event.get("target_ids", []),
             "targets": event.get("targets", []),
@@ -287,5 +308,6 @@ class SimsonLastAutomationEventSensor(SimsonBaseSensor):
             "fanout_mode": event.get("fanout_mode", ""),
             "call_id": event.get("call_id", ""),
             "bridge_id": event.get("bridge_id", ""),
+            "results": event.get("results", []),
             "retry_after": event.get("retry_after", ""),
         }

@@ -34,6 +34,7 @@ from .const import (
     SERVICE_GET_REMOTE_USERS,
     SERVICE_GET_CALL_HISTORY,
     SERVICE_RUN_TRIGGER,
+    SERVICE_CONNECT_SIP_PHONES,
 )
 
 logger = logging.getLogger(__name__)
@@ -81,8 +82,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             entry, [Platform.SENSOR]
         )
 
-        # Register services.
+        # Register services and live event sync.
         _register_services(hass, client)
+        _register_live_event_sync(hass, entry, coordinator)
 
         # Expose /api/webrtc-config so the Lovelace card can fetch SIP credentials.
         hass.http.register_view(WebRTCConfigView(client))
@@ -106,13 +108,16 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             await data["client"].close()
         if data and data.get("notification_unsub"):
             data["notification_unsub"]()
+        if data:
+            for unsub in data.get("event_unsubs", []) or []:
+                unsub()
         # Unregister services when last entry is removed.
         if not hass.data[DOMAIN]:
             for svc in (SERVICE_MAKE_CALL, SERVICE_ANSWER_CALL, SERVICE_REJECT_CALL,
                         SERVICE_HANGUP_CALL, SERVICE_WEBRTC_SIGNAL, SERVICE_GET_TARGETS,
                         SERVICE_USER_HEARTBEAT, SERVICE_GET_REMOTE_USERS,
                         SERVICE_GET_CALL_HISTORY, SERVICE_RUN_TRIGGER,
-                        SERVICE_TRANSFER_CALL):
+                        SERVICE_TRANSFER_CALL, SERVICE_CONNECT_SIP_PHONES):
                 hass.services.async_remove(DOMAIN, svc)
     return unload_ok
 
@@ -162,6 +167,30 @@ class WebRTCConfigView(HomeAssistantView):
 def _register_services(hass: HomeAssistant, client: SimsonApiClient) -> None:
     """Register Simson services."""
 
+    def normalize_auto_mode(value: str, default: str = "speaker") -> str:
+        """Map friendly service values to the exact VPS/Asterisk auto-answer modes."""
+        mode = str(value or default).strip().lower()
+        aliases = {
+            "none": "normal",
+            "off": "normal",
+            "disabled": "normal",
+            "answer": "normal",
+            "auto": "normal",
+            "auto_answer": "normal",
+            "auto-answer": "normal",
+            "speakerphone": "speaker",
+            "intercom": "speaker",
+        }
+        mode = aliases.get(mode, mode)
+        return mode if mode in ("", "normal", "speaker") else default
+
+    def refresh_all_entries() -> None:
+        """Refresh all Simson coordinators after a service changes call state."""
+        for data in hass.data.get(DOMAIN, {}).values():
+            coordinator = data.get("coordinator") if isinstance(data, dict) else None
+            if coordinator:
+                hass.async_create_task(coordinator.async_request_refresh())
+
     async def handle_make_call(call: ServiceCall) -> None:
         target = call.data.get("target_node_id", "")
         target_id = call.data.get("target_id", "")
@@ -185,6 +214,7 @@ def _register_services(hass: HomeAssistant, client: SimsonApiClient) -> None:
                 caller_user_id=caller_user_id,
             )
             logger.info("Call initiated: %s", result)
+            refresh_all_entries()
         except Exception as err:
             logger.error("Failed to make call: %s", err)
 
@@ -193,6 +223,7 @@ def _register_services(hass: HomeAssistant, client: SimsonApiClient) -> None:
         answered_by_user_id = call.data.get("answered_by_user_id", "")
         try:
             await client.answer_call(call_id, answered_by_user_id=answered_by_user_id)
+            refresh_all_entries()
         except Exception as err:
             logger.error("Failed to answer call: %s", err)
 
@@ -201,6 +232,7 @@ def _register_services(hass: HomeAssistant, client: SimsonApiClient) -> None:
         reason = call.data.get("reason", "rejected")
         try:
             await client.reject_call(call_id, reason)
+            refresh_all_entries()
         except Exception as err:
             logger.error("Failed to reject call: %s", err)
 
@@ -208,6 +240,7 @@ def _register_services(hass: HomeAssistant, client: SimsonApiClient) -> None:
         call_id = call.data["call_id"]
         try:
             await client.hangup_call(call_id)
+            refresh_all_entries()
         except Exception as err:
             logger.error("Failed to hangup call: %s", err)
 
@@ -223,6 +256,7 @@ def _register_services(hass: HomeAssistant, client: SimsonApiClient) -> None:
                 target_user_id=target_user_id,
                 target_user_name=target_user_name,
             )
+            refresh_all_entries()
         except Exception as err:
             logger.error("Failed to transfer call: %s", err)
 
@@ -337,6 +371,7 @@ def _register_services(hass: HomeAssistant, client: SimsonApiClient) -> None:
         try:
             result = await client.run_trigger(trigger_id)
             logger.info("Automation trigger initiated: %s", result)
+            refresh_all_entries()
         except Exception as err:
             logger.error("Failed to run automation trigger %s: %s", trigger_id, err)
 
@@ -347,6 +382,47 @@ def _register_services(hass: HomeAssistant, client: SimsonApiClient) -> None:
             handle_run_trigger,
             schema=vol.Schema({
                 vol.Required("trigger_id"): str,
+            }),
+        )
+
+    async def handle_connect_sip_phones(call: ServiceCall) -> None:
+        source_extension = str(call.data["source_extension"]).strip()
+        target_extension = str(call.data["target_extension"]).strip()
+        source_auto_mode = normalize_auto_mode(call.data.get("source_auto_mode", "speaker"))
+        target_auto_mode = normalize_auto_mode(call.data.get("target_auto_mode", "speaker"))
+        caller_id = str(call.data.get("caller_id", "") or "").strip()
+        timeout_sec = int(call.data.get("timeout_sec", 30) or 30)
+        try:
+            result = await client.connect_sip_phones(
+                source_extension=source_extension,
+                target_extension=target_extension,
+                source_auto_mode=source_auto_mode,
+                target_auto_mode=target_auto_mode,
+                caller_id=caller_id,
+                timeout_sec=timeout_sec,
+            )
+            logger.info("SIP intercom initiated: %s", result)
+            refresh_all_entries()
+        except Exception as err:
+            logger.error(
+                "Failed to connect SIP phones %s -> %s: %s",
+                source_extension,
+                target_extension,
+                err,
+            )
+
+    if not hass.services.has_service(DOMAIN, SERVICE_CONNECT_SIP_PHONES):
+        hass.services.async_register(
+            DOMAIN,
+            SERVICE_CONNECT_SIP_PHONES,
+            handle_connect_sip_phones,
+            schema=vol.Schema({
+                vol.Required("source_extension"): str,
+                vol.Required("target_extension"): str,
+                vol.Optional("source_auto_mode", default="speaker"): vol.In(["", "none", "normal", "answer", "speaker", "intercom"]),
+                vol.Optional("target_auto_mode", default="speaker"): vol.In(["", "none", "normal", "answer", "speaker", "intercom"]),
+                vol.Optional("caller_id", default=""): str,
+                vol.Optional("timeout_sec", default=30): vol.All(int, vol.Range(min=5, max=120)),
             }),
         )
 
@@ -404,6 +480,103 @@ def _register_services(hass: HomeAssistant, client: SimsonApiClient) -> None:
                 vol.Optional("limit", default=50): int,
             }),
         )
+
+
+def _register_live_event_sync(
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    coordinator: SimsonCoordinator,
+) -> None:
+    """Update managed entities immediately when the addon fires HA events."""
+
+    def event_matches_this_entry(payload: dict) -> bool:
+        data = coordinator.data or {}
+        node_id = str(data.get("node_id") or "")
+        account_id = str(data.get("account_id") or "")
+        payload_node = str(payload.get("node_id") or payload.get("target_node_id") or "")
+        payload_account = str(payload.get("account_id") or "")
+        if payload_account and account_id and payload_account != account_id:
+            return False
+        if payload_node and node_id and payload_node != node_id:
+            target_nodes = payload.get("target_node_ids")
+            if isinstance(target_nodes, list) and node_id in [str(x) for x in target_nodes]:
+                return True
+            return False
+        return True
+
+    def state_for_event(payload: dict) -> str:
+        event = str(payload.get("event") or payload.get("status") or "").strip()
+        if event in ("incoming", "ringing"):
+            return "incoming"
+        if event in ("outgoing", "requesting", "forwarded"):
+            return "ringing"
+        if event in ("active", "answered"):
+            return "active"
+        if event in ("ended", "failed", "missed", "declined", "timeout"):
+            return event
+        return event or "unknown"
+
+    @callback
+    def update_call_event(event: Event) -> None:
+        payload = dict(event.data or {})
+        if not event_matches_this_entry(payload):
+            return
+
+        current = dict(coordinator.data or {})
+        current["last_call_event"] = payload
+        calls_data = dict(current.get("calls_data") or {})
+        event_state = state_for_event(payload)
+        call_id = str(payload.get("call_id") or "")
+        terminal = event_state in {"ended", "failed", "missed", "declined", "timeout"}
+
+        active_call = calls_data.get("active_call") or current.get("active_call")
+        if terminal:
+            if not active_call or not call_id or active_call.get("call_id") == call_id:
+                calls_data["active_call"] = None
+                current["active_call"] = None
+        else:
+            merged = dict(active_call or {})
+            merged.update({
+                "call_id": call_id or merged.get("call_id", ""),
+                "state": event_state,
+                "direction": payload.get("direction", merged.get("direction", "")),
+                "remote_node_id": payload.get("remote_node_id", merged.get("remote_node_id", "")),
+                "remote_label": payload.get("remote_label") or payload.get("remote_number") or merged.get("remote_label", ""),
+                "call_type": payload.get("call_type", merged.get("call_type", "")),
+                "sip_bridge_id": payload.get("sip_bridge_id", merged.get("sip_bridge_id", "")),
+                "target_id": payload.get("target_id", merged.get("target_id", "")),
+                "target_type": payload.get("target_type", merged.get("target_type", "")),
+                "target_label": payload.get("target_label", merged.get("target_label", "")),
+                "source_extension": payload.get("source_extension", merged.get("source_extension", "")),
+                "target_extension": payload.get("target_extension", merged.get("target_extension", "")),
+                "source_auto_mode": payload.get("source_auto_mode", merged.get("source_auto_mode", "")),
+                "target_auto_mode": payload.get("target_auto_mode", merged.get("target_auto_mode", "")),
+                "started_at": payload.get("started_at", merged.get("started_at", "")),
+                "answered_at": payload.get("answered_at", merged.get("answered_at", "")),
+            })
+            calls_data["active_call"] = merged
+            current["active_call"] = merged
+
+        current["calls_data"] = calls_data
+        coordinator.async_set_updated_data(current)
+
+    @callback
+    def update_automation_event(event: Event) -> None:
+        payload = dict(event.data or {})
+        if not event_matches_this_entry(payload):
+            return
+        current = dict(coordinator.data or {})
+        current["last_automation_event"] = {"event_type": event.event_type, **payload}
+        coordinator.async_set_updated_data(current)
+
+    unsubs = [
+        hass.bus.async_listen("simson_call_event", update_call_event),
+        hass.bus.async_listen("simson_call_status", update_call_event),
+        hass.bus.async_listen("simson_automation_triggered", update_automation_event),
+        hass.bus.async_listen("simson_door_station_call", update_automation_event),
+        hass.bus.async_listen("simson_sip_intercom", update_automation_event),
+    ]
+    hass.data.setdefault(DOMAIN, {}).setdefault(entry.entry_id, {})["event_unsubs"] = unsubs
 
 
 def _register_mobile_notification_actions(

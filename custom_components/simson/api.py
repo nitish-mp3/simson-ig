@@ -108,6 +108,24 @@ class SimsonApiClient:
     async def run_trigger(self, trigger_id: str) -> dict:
         return await self._post(f"/api/automation/trigger/{quote(trigger_id, safe='')}")
 
+    async def connect_sip_phones(
+        self,
+        source_extension: str,
+        target_extension: str,
+        source_auto_mode: str = "speaker",
+        target_auto_mode: str = "speaker",
+        caller_id: str = "",
+        timeout_sec: int = 30,
+    ) -> dict:
+        return await self._post("/api/sip-intercom", {
+            "source_extension": source_extension,
+            "target_extension": target_extension,
+            "source_auto_mode": source_auto_mode,
+            "target_auto_mode": target_auto_mode,
+            "caller_id": caller_id,
+            "timeout_sec": timeout_sec,
+        })
+
     async def webrtc_signal(
         self,
         call_id: str,

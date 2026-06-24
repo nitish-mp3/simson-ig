@@ -117,3 +117,63 @@ run_trigger:
       example: "doorbell_call"
       selector:
         text:
+
+connect_sip_phones:
+  name: Connect SIP Phones
+  description: Call a source SIP phone and bridge it to a target SIP phone using the VPS intercom/callback path. Useful for HA automations and action buttons.
+  fields:
+    source_extension:
+      name: Source SIP Extension
+      description: SIP phone that should be called first, for example 1027.
+      required: true
+      example: "1027"
+      selector:
+        text:
+    target_extension:
+      name: Target SIP Extension
+      description: SIP phone to bridge to the source phone, for example 1603.
+      required: true
+      example: "1603"
+      selector:
+        text:
+    source_auto_mode:
+      name: Source Auto Mode
+      description: Auto-answer hint sent to the source phone callback. Use speaker for intercom/speakerphone behavior.
+      required: false
+      default: "speaker"
+      selector:
+        select:
+          options:
+            - "normal"
+            - "answer"
+            - "speaker"
+            - "intercom"
+    target_auto_mode:
+      name: Target Auto Mode
+      description: Auto-answer hint sent to the target phone. Use speaker for intercom/speakerphone behavior.
+      required: false
+      default: "speaker"
+      selector:
+        select:
+          options:
+            - "normal"
+            - "answer"
+            - "speaker"
+            - "intercom"
+    caller_id:
+      name: Caller ID
+      description: Optional caller ID/name to show on the SIP phones.
+      required: false
+      example: "\"Kitchen\" <1603>"
+      selector:
+        text:
+    timeout_sec:
+      name: Timeout Seconds
+      description: How long to ring each callback leg.
+      required: false
+      default: 30
+      selector:
+        number:
+          min: 5
+          max: 120
+          mode: box
