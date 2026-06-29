@@ -95,6 +95,7 @@ class SimsonConnectionSensor(SimsonBaseSensor):
                 "node_id": self.coordinator.data.get("node_id", ""),
                 "account_id": self.coordinator.data.get("account_id", ""),
                 "uptime": self.coordinator.data.get("uptime", 0),
+                "routing": self.coordinator.data.get("routing", {}),
             }
         return {}
 

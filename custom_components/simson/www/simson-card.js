@@ -1,7 +1,9 @@
 /**
- * Simson Call Relay — Lovelace Card v4.8.8
+ * Simson Call Relay — Lovelace Card v4.8.9
  *
  * Full WebRTC voice calling between HA instances + Asterisk SIP phone support.
+ * v4.8.9: Use the addon/site default gateway trunk instead of silently
+ *         falling back to 7009 in the card dial pad.
  * v4.8.8: Professional compact UI refresh: calmer visual system, tighter
  *         responsive dial/call surfaces, and clearer live call hierarchy.
  * v4.8.7: Guard call action buttons against double-fire and render-time missed clicks.
@@ -59,7 +61,7 @@
  *     - node_id: office2
  */
 
-const VERSION = "4.8.8";
+const VERSION = "4.8.9";
 
 // Default ICE servers (fallback when /api/webrtc-config is unavailable).
 const ICE_SERVERS = [
@@ -1840,7 +1842,7 @@ class SimsonCard extends HTMLElement {
       title: config.title || "Simson",
       node_id: nodeId,
       target_nodes: targetNodes,
-      pstn_trunk: config.pstn_trunk || "7009",
+      pstn_trunk: String(config.pstn_trunk || "").trim(),
     };
 
     // Pre-seed cache slots so configured nodes immediately appear in suggestions.
@@ -2142,6 +2144,18 @@ class SimsonCard extends HTMLElement {
   _attr(suffix, key, fallback = null) {
     return this._entity(suffix)?.attributes?.[key] ?? fallback;
   }
+  _effectivePstnTrunk(includeDraft = true) {
+    const draft = includeDraft ? String(this._pstnTrunkDraft || "").trim() : "";
+    if (draft) return draft;
+    const configured = String(this._config?.pstn_trunk || "").trim();
+    if (configured) return configured;
+    const routing = this._attr("connection", "routing", {}) || {};
+    const siteDefault = String(routing.default_gateway_trunk || "").trim();
+    if (siteDefault) return siteDefault;
+    const gatewayTarget = (this._targets || []).find(t => (t.type === "gateway" || t.trunk) && t.trunk);
+    if (gatewayTarget?.trunk) return String(gatewayTarget.trunk).trim();
+    return "7009";
+  }
   _isConnected() { return this._val("connection") === "connected"; }
   _callState() {
     const state = this._val("call_state", "idle");
@@ -2220,7 +2234,7 @@ class SimsonCard extends HTMLElement {
   _dialSIPExtension(extension) {
     if (!extension) return;
     if (this._looksLikePhoneNumber(extension)) {
-      const trunk = (this._pstnTrunkDraft || this._config.pstn_trunk || "7009").trim();
+      const trunk = this._effectivePstnTrunk();
       this._dialPSTNNumber(extension, trunk);
       return;
     }
@@ -2233,15 +2247,16 @@ class SimsonCard extends HTMLElement {
     });
   }
 
-  _dialPSTNNumber(number, trunk = "7009") {
+  _dialPSTNNumber(number, trunk = "") {
     const cleaned = String(number || "").replace(/[^\d+]/g, "");
     const digits = cleaned.replace(/^\+/, "");
     if (!digits) return;
+    const effectiveTrunk = String(trunk || this._effectivePstnTrunk()).trim();
     this._currentRemoteNode = `phone:${cleaned}`;
     this._callStart = null;
     this._callService("make_call", {
       phone_number: cleaned,
-      trunk: trunk || "7009",
+      trunk: effectiveTrunk,
       call_type: "sip",
       caller_user_id: this._hass?.user?.id || "",
     });
@@ -3286,7 +3301,7 @@ class SimsonCard extends HTMLElement {
             <button type="button" class="route-mode gateway" data-focus="pstn-number-input" ${!connected ? "disabled" : ""}>
               <span class="route-mode-icon">\u{1F4F2}</span>
               <strong>Gateway</strong>
-              <span>Use GSM/PSTN trunk ${this._esc(this._pstnTrunkDraft || this._config.pstn_trunk || "7009")}.</span>
+              <span>Use GSM/PSTN trunk ${this._esc(this._effectivePstnTrunk())}.</span>
             </button>
           </div>
 
@@ -3364,7 +3379,7 @@ class SimsonCard extends HTMLElement {
 
         if (type === "asterisk") {
           // Always show SIP section so users can dial extension even with no configured targets.
-          const defaultPstnTrunk = this._pstnTrunkDraft || this._config.pstn_trunk || "7009";
+          const defaultPstnTrunk = this._effectivePstnTrunk();
           dialHtml += `
             <div class="target-section">
               <div class="call-form-card sip-card">
@@ -3711,7 +3726,7 @@ class SimsonCard extends HTMLElement {
     });
     const doPstnDial = () => {
       const number = (pstnInput?.value ?? this._pstnDialDraft).trim();
-      const trunk = ((pstnTrunkInput?.value ?? this._pstnTrunkDraft) || this._config.pstn_trunk || "7009").trim();
+      const trunk = ((pstnTrunkInput?.value ?? this._pstnTrunkDraft) || this._effectivePstnTrunk(false)).trim();
       if (number) {
         this._pstnDialDraft = number;
         this._pstnTrunkDraft = trunk;
