@@ -1,7 +1,9 @@
 /**
- * Simson Call Relay — Lovelace Card v4.8.9
+ * Simson Call Relay — Lovelace Card v4.8.10
  *
  * Full WebRTC voice calling between HA instances + Asterisk SIP phone support.
+ * v4.8.10: Cache-bust frontend autoloading and harden duplicate script loading
+ *          / legacy card config so refreshes do not show Configuration error.
  * v4.8.9: Use the addon/site default gateway trunk instead of silently
  *         falling back to 7009 in the card dial pad.
  * v4.8.8: Professional compact UI refresh: calmer visual system, tighter
@@ -61,7 +63,7 @@
  *     - node_id: office2
  */
 
-const VERSION = "4.8.9";
+const VERSION = "4.8.10";
 
 // Default ICE servers (fallback when /api/webrtc-config is unavailable).
 const ICE_SERVERS = [
@@ -1818,6 +1820,7 @@ class SimsonCard extends HTMLElement {
   // ── Config ──────────────────────────────────────────────────────────
 
   setConfig(config) {
+    config = config || {};
     // node_id is optional — auto-detected from entities or extracted from old entity names.
     let nodeId = config.node_id || "";
     if (!nodeId && config.connection_entity) {
@@ -1833,9 +1836,13 @@ class SimsonCard extends HTMLElement {
       if (m) nodeId = m[1];
     }
 
-    // target_nodes supports both string shorthand and {node_id: "..."} objects.
-    const targetNodes = (config.target_nodes || [])
-      .map(t => (typeof t === "string" ? t : t.node_id))
+    // target_nodes supports string shorthand, {node_id: "..."} objects, and
+    // legacy single-object/string configs without throwing a Lovelace error.
+    const rawTargetNodes = Array.isArray(config.target_nodes)
+      ? config.target_nodes
+      : (config.target_nodes ? [config.target_nodes] : []);
+    const targetNodes = rawTargetNodes
+      .map(t => (typeof t === "string" ? t : (t?.node_id || t?.id || "")))
       .filter(Boolean);
 
     this._config = {
@@ -3884,20 +3891,25 @@ class SimsonCard extends HTMLElement {
   getCardSize() { return 4; }
 }
 
-// Primary registration — new unique name avoids conflict with any old manually-added card.
-customElements.define("simson-relay-card", SimsonCard);
+// Primary registration — guarded because HA can load both the auto-injected
+// resource and a manually-added dashboard resource during cache churn.
+if (!customElements.get("simson-relay-card")) {
+  customElements.define("simson-relay-card", SimsonCard);
+}
 
 // Silent back-compat aliases — if user had old card already defined, these are skipped.
 try { customElements.define("simson-card", class extends SimsonCard {}); } catch (e) {}
 try { customElements.define("simson-call-card", class extends SimsonCard {}); } catch (e) {}
 
 window.customCards = window.customCards || [];
-window.customCards.push({
-  type: "simson-relay-card",
-  name: "Simson Call Relay",
-  description: "Voice calling between Home Assistant instances — WebRTC, history, Asterisk/SIP",
-  preview: false,
-});
+if (!window.customCards.some(card => card?.type === "simson-relay-card")) {
+  window.customCards.push({
+    type: "simson-relay-card",
+    name: "Simson Call Relay",
+    description: "Voice calling between Home Assistant instances — WebRTC, history, Asterisk/SIP",
+    preview: false,
+  });
+}
 
 console.info(
   `%c SIMSON %c v${VERSION} `,

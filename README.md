@@ -55,11 +55,11 @@ If the card picker still only shows **Manual**, the frontend has not loaded the 
 2. Add this resource:
 
 ```
-URL: /simson/www/simson-card.js
+URL: /simson/www/simson-card.js?v=4.8.10
 Type: JavaScript Module
 ```
 
-3. Hard-refresh the browser, or clear the Home Assistant frontend cache.
+3. Reload the dashboard. If an older manual resource exists, update it to the versioned URL above.
 4. Add the card manually with:
 
 ```yaml
@@ -86,7 +86,7 @@ Check these in order:
 1. **Downloaded is not enough**: add **Simson Call Relay** from **Settings -> Devices & Services -> Add Integration**.
 2. Confirm the addon is running and reachable at the URL entered during setup.
 3. Open `/simson/www/simson-card.js` in the HA browser. If it returns 404, the integration is not loaded.
-4. Add `/simson/www/simson-card.js` as a Dashboard Resource and hard-refresh the browser.
+4. Add `/simson/www/simson-card.js?v=4.8.10` as a Dashboard Resource and reload the dashboard.
 
 ## SIP Phone / Landline Routing
 
