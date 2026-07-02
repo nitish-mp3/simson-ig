@@ -1,7 +1,9 @@
 /**
- * Simson Call Relay — Lovelace Card v4.8.12
+ * Simson Call Relay — Lovelace Card v4.8.13
  *
  * Full WebRTC voice calling between HA instances + Asterisk SIP phone support.
+ * v4.8.13: Add explicit route selector and fix numeric SIP extensions being
+ *           misdetected as HAOS nodes in the smart composer.
  * v4.8.12: Rebuild idle dashboard into one smart composer with compact route
  *          chips, cleaner live state, and faster lower-noise interactions.
  * v4.8.11: Keep locally answered node calls alive while HA active status races
@@ -67,7 +69,7 @@
  *     - node_id: office2
  */
 
-const VERSION = "4.8.12";
+const VERSION = "4.8.13";
 
 // Default ICE servers (fallback when /api/webrtc-config is unavailable).
 const ICE_SERVERS = [
@@ -1331,9 +1333,27 @@ const STYLES = `
 
   .smart-row {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) 112px;
+    grid-template-columns: 122px minmax(0, 1fr) 104px;
     gap: 9px;
     align-items: stretch;
+  }
+
+  .smart-mode {
+    min-width: 0;
+    border: 1px solid var(--simson-stroke);
+    border-radius: 15px;
+    color: var(--simson-ink);
+    background: rgba(2, 7, 6, .56);
+    padding: 0 12px;
+    font-size: 12px;
+    font-weight: 760;
+    outline: 0;
+    cursor: pointer;
+  }
+
+  .smart-mode:focus {
+    border-color: var(--simson-focus);
+    box-shadow: 0 0 0 3px rgba(34, 197, 160, .11);
   }
 
   .smart-input-wrap {
@@ -1415,6 +1435,11 @@ const STYLES = `
     margin-top: 9px;
     color: var(--simson-dim);
     font-size: 10.5px;
+  }
+
+  .smart-detected {
+    color: #dce5df;
+    font-weight: 760;
   }
 
   .smart-trunk {
@@ -2064,6 +2089,7 @@ class SimsonCard extends HTMLElement {
     this._sipDialDraft = "";
     this._pstnDialDraft = "";
     this._pstnTrunkDraft = "";
+    this._smartRouteMode = "auto";
     this._remoteUsers = [];
     this._usersLoading = false;
     this._usersCache = {};  // nodeId -> { users, timestamp }
@@ -3351,28 +3377,37 @@ class SimsonCard extends HTMLElement {
     return ["INPUT", "TEXTAREA", "SELECT"].includes(el.tagName);
   }
 
-  _smartDialRoute(value) {
+  _smartDialRoute(value, forcedMode = this._smartRouteMode || "auto") {
     const raw = String(value || "").trim();
-    if (!raw) return { kind: "ready", label: "Ready", icon: "\u{1F50E}", hint: "Type node, extension, or phone number" };
+    const mode = String(forcedMode || "auto").toLowerCase();
+    if (!raw) return { kind: "ready", label: "Ready", icon: "\u{1F50E}", hint: "Type extension, phone number, or node" };
+    if (mode === "sip") return { kind: "sip", label: "SIP", icon: "\u{260E}", hint: "Forced SIP extension route" };
+    if (mode === "pstn") return { kind: "pstn", label: "Gateway", icon: "\u{1F4F2}", hint: `Forced outside call via trunk ${this._effectivePstnTrunk()}` };
+    if (mode === "node") return { kind: "node", label: "HAOS", icon: "\u{1F3E0}", hint: "Forced Home Assistant node/user route" };
+
     const lowered = raw.toLowerCase();
+    const normalized = raw.replace(/[^\d+]/g, "");
+    const digitsOnly = normalized.replace(/\D/g, "");
+    if (/^sip:/i.test(raw) || /^ext:/i.test(raw)) {
+      return { kind: "sip", label: "SIP", icon: "\u{260E}", hint: "Calls an internal SIP extension" };
+    }
+    if (/^node:/i.test(raw) || /^haos:/i.test(raw)) {
+      return { kind: "node", label: "HAOS", icon: "\u{1F3E0}", hint: "Calls a Home Assistant node/user" };
+    }
+    if (/^\d{1,6}$/.test(digitsOnly) && digitsOnly === raw.replace(/\D/g, "")) {
+      return { kind: "sip", label: "SIP", icon: "\u{260E}", hint: "Numeric values up to 6 digits are SIP extensions" };
+    }
+    if (normalized.startsWith("+") || digitsOnly.length >= 7) {
+      return { kind: "pstn", label: "Gateway", icon: "\u{1F4F2}", hint: `Uses trunk ${this._effectivePstnTrunk()}` };
+    }
     const knownNode = this._getNodeTargets().find(t =>
       String(t.node_id || t.id || "").toLowerCase() === lowered ||
       String(t.label || "").toLowerCase() === lowered
     );
     if (knownNode || /^[a-z][a-z0-9_-]{1,}$/i.test(raw)) {
-      return { kind: "node", label: "HAOS node", icon: "\u{1F3E0}", hint: "Rings a Home Assistant node/user" };
+      return { kind: "node", label: "HAOS", icon: "\u{1F3E0}", hint: "Calls a Home Assistant node/user" };
     }
-    const normalized = raw.replace(/[^\d+]/g, "");
-    if (/^sip:/i.test(raw) || /^ext:/i.test(raw)) {
-      return { kind: "sip", label: "SIP", icon: "\u{260E}", hint: "Calls an internal SIP extension" };
-    }
-    if (normalized.startsWith("+") || normalized.replace(/\D/g, "").length >= 7) {
-      return { kind: "pstn", label: "Gateway", icon: "\u{1F4F2}", hint: `Uses trunk ${this._effectivePstnTrunk()}` };
-    }
-    if (/^\d{1,6}$/.test(normalized)) {
-      return { kind: "sip", label: "SIP", icon: "\u{260E}", hint: "Calls an internal SIP extension" };
-    }
-    return { kind: "node", label: "HAOS node", icon: "\u{1F3E0}", hint: "Rings a Home Assistant node/user" };
+    return { kind: "sip", label: "SIP", icon: "\u{260E}", hint: "Defaulting to SIP; switch route if needed" };
   }
 
   _dialSmartValue(value, trunk = "") {
@@ -3393,10 +3428,11 @@ class SimsonCard extends HTMLElement {
       this._dialSIPExtension(ext);
       return;
     }
-    this._selectedNode = raw;
-    this._userPickerNodeId = raw;
+    const nodeTarget = raw.replace(/^node:/i, "").replace(/^haos:/i, "").trim();
+    this._selectedNode = nodeTarget;
+    this._userPickerNodeId = nodeTarget;
     this._userPickerTargetId = "";
-    this._callService("get_remote_users", { node_id: raw });
+    this._callService("get_remote_users", { node_id: nodeTarget });
   }
 
   _renderSmartComposer(connected, nodeId) {
@@ -3409,6 +3445,8 @@ class SimsonCard extends HTMLElement {
     const smartValue = this._nodeInputDraft || "";
     const route = this._smartDialRoute(smartValue);
     const trunk = this._pstnTrunkDraft || this._effectivePstnTrunk();
+    const mode = this._smartRouteMode || "auto";
+    const routeCaption = mode === "auto" ? `Auto: ${route.label}` : route.label;
     const quickTargets = [
       ...nodeTargets.slice(0, 3).map(t => ({ ...t, type: "node" })),
       ...nonNodeTargets.filter(t => ["sip", "asterisk", "gateway"].includes(t.type || "")).slice(0, 5),
@@ -3464,18 +3502,24 @@ class SimsonCard extends HTMLElement {
             <div class="smart-node">${this._esc(nodeId)}</div>
           </div>
           <div class="smart-row">
+            <select id="smart-route-mode" class="smart-mode" ${!connected ? "disabled" : ""} title="Choose how this value should be called">
+              <option value="auto" ${mode === "auto" ? "selected" : ""}>Auto</option>
+              <option value="sip" ${mode === "sip" ? "selected" : ""}>SIP</option>
+              <option value="pstn" ${mode === "pstn" ? "selected" : ""}>Gateway</option>
+              <option value="node" ${mode === "node" ? "selected" : ""}>HAOS</option>
+            </select>
             <div class="smart-input-wrap">
               <span class="smart-route-icon">${route.icon}</span>
               <input id="node-input" data-smart-composer="1" type="text"
-                placeholder="office2, 1025, 100, +91..."
+                placeholder="1027, 100, +91..., office2"
                 value="${this._esc(smartValue)}" ${!connected ? "disabled" : ""}
                 list="node-suggestions" autocomplete="off" />
-              <span class="smart-route-label">${this._esc(route.label)}</span>
+              <span class="smart-route-label">${this._esc(routeCaption)}</span>
             </div>
             <button class="smart-call-btn" id="btn-call-manual" data-smart-composer="1" ${!connected ? "disabled" : ""}>Call</button>
           </div>
           <div class="smart-meta">
-            <span>${this._esc(route.hint)}</span>
+            <span><span class="smart-detected">${this._esc(routeCaption)}</span> · ${this._esc(route.hint)}</span>
             <label class="smart-trunk">Gateway
               <input id="pstn-trunk-input" type="text" value="${this._esc(trunk)}" title="Default outside trunk" ${!connected ? "disabled" : ""} />
             </label>
@@ -4078,7 +4122,9 @@ class SimsonCard extends HTMLElement {
 
     if (wasNodeInputFocused && nodeInputBefore) {
       this._nodeInputDraft = nodeInputBefore.value;
-      this._selectedNode = nodeInputBefore.value;
+      if (nodeInputBefore.dataset.smartComposer !== "1") {
+        this._selectedNode = nodeInputBefore.value;
+      }
     }
     if (wasSipInputFocused && sipInputBefore) {
       this._sipDialDraft = sipInputBefore.value;
@@ -4151,13 +4197,28 @@ class SimsonCard extends HTMLElement {
       });
     });
 
+    const smartRouteMode = root.querySelector("#smart-route-mode");
+    smartRouteMode?.addEventListener("change", (e) => {
+      this._smartRouteMode = e.target.value || "auto";
+      this._render();
+    });
+
     // Node input
     const nodeInput = root.querySelector("#node-input");
     if (nodeInput) {
       const smartComposer = nodeInput.dataset.smartComposer === "1";
       nodeInput.addEventListener("input", (e) => {
         this._nodeInputDraft = e.target.value;
-        if (!smartComposer) this._selectedNode = e.target.value;
+        if (smartComposer) {
+          const route = this._smartDialRoute(e.target.value);
+          const caption = (this._smartRouteMode || "auto") === "auto" ? `Auto: ${route.label}` : route.label;
+          root.querySelector(".smart-route-icon").textContent = route.icon;
+          root.querySelector(".smart-route-label").textContent = caption;
+          const meta = root.querySelector(".smart-meta > span");
+          if (meta) meta.innerHTML = `<span class="smart-detected">${this._esc(caption)}</span> · ${this._esc(route.hint)}`;
+        } else {
+          this._selectedNode = e.target.value;
+        }
       });
       nodeInput.addEventListener("change", (e) => {
         const val = e.target.value.trim();
