@@ -1,7 +1,9 @@
 /**
- * Simson Call Relay — Lovelace Card v4.8.11
+ * Simson Call Relay — Lovelace Card v4.8.12
  *
  * Full WebRTC voice calling between HA instances + Asterisk SIP phone support.
+ * v4.8.12: Rebuild idle dashboard into one smart composer with compact route
+ *          chips, cleaner live state, and faster lower-noise interactions.
  * v4.8.11: Keep locally answered node calls alive while HA active status races
  *          back, and pair with HAOS ring-code fallback isolation.
  * v4.8.10: Cache-bust frontend autoloading and harden duplicate script loading
@@ -65,7 +67,7 @@
  *     - node_id: office2
  */
 
-const VERSION = "4.8.11";
+const VERSION = "4.8.12";
 
 // Default ICE servers (fallback when /api/webrtc-config is unavailable).
 const ICE_SERVERS = [
@@ -1224,6 +1226,347 @@ const STYLES = `
     .transfer-targets,
     .live-board-row {
       grid-template-columns: 1fr;
+    }
+  }
+
+  /* v4.8.12 professional operator console */
+  :host {
+    --simson-ink: #eef3ef;
+    --simson-soft: #a5afa8;
+    --simson-dim: #6f7a74;
+    --simson-surface: rgba(15, 19, 18, .92);
+    --simson-surface-2: rgba(25, 30, 28, .82);
+    --simson-stroke: rgba(230, 237, 232, .12);
+    --simson-focus: rgba(34, 197, 160, .48);
+  }
+
+  .card {
+    width: min(100%, 720px);
+    padding: 16px;
+    background:
+      radial-gradient(circle at 15% 0%, rgba(34, 197, 160, .12), transparent 30%),
+      linear-gradient(145deg, #111513 0%, #0d100f 58%, #15120f 100%);
+  }
+
+  .header {
+    margin-bottom: 12px;
+  }
+
+  .header-icon {
+    width: 38px;
+    height: 38px;
+    font-size: 17px;
+  }
+
+  .header-title {
+    font-size: 17px;
+  }
+
+  .tabs {
+    max-width: 260px;
+    margin-bottom: 12px;
+  }
+
+  .tab {
+    padding: 8px 10px;
+    font-size: 10.5px;
+  }
+
+  .smart-console {
+    display: grid;
+    gap: 12px;
+  }
+
+  .smart-card {
+    border: 1px solid var(--simson-stroke);
+    border-radius: 18px;
+    background:
+      linear-gradient(135deg, rgba(34, 197, 160, .08), rgba(242, 140, 56, .045)),
+      var(--simson-surface);
+    padding: 14px;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.035);
+  }
+
+  .smart-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 12px;
+  }
+
+  .smart-kicker {
+    color: #65d6bd;
+    font-size: 9px;
+    font-weight: 850;
+    letter-spacing: 1.25px;
+    text-transform: uppercase;
+  }
+
+  .smart-title {
+    color: var(--simson-ink);
+    font-size: 17px;
+    font-weight: 780;
+    letter-spacing: -.25px;
+    margin-top: 2px;
+  }
+
+  .smart-help {
+    color: var(--simson-soft);
+    font-size: 11px;
+    line-height: 1.45;
+    margin-top: 3px;
+  }
+
+  .smart-node {
+    color: #c4fff2;
+    background: rgba(34, 197, 160, .09);
+    border: 1px solid rgba(34, 197, 160, .18);
+    border-radius: 999px;
+    padding: 5px 9px;
+    font-size: 10px;
+    font-weight: 780;
+    white-space: nowrap;
+  }
+
+  .smart-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 112px;
+    gap: 9px;
+    align-items: stretch;
+  }
+
+  .smart-input-wrap {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 9px;
+    min-height: 52px;
+    border: 1px solid var(--simson-stroke);
+    border-radius: 15px;
+    background: rgba(2, 7, 6, .52);
+    padding: 0 12px;
+  }
+
+  .smart-input-wrap:focus-within {
+    border-color: var(--simson-focus);
+    box-shadow: 0 0 0 3px rgba(34, 197, 160, .11);
+  }
+
+  .smart-route-icon {
+    width: 27px;
+    height: 27px;
+    display: inline-grid;
+    place-items: center;
+    border-radius: 10px;
+    color: #dffdf7;
+    background: rgba(255,255,255,.055);
+    font-size: 14px;
+  }
+
+  .smart-input-wrap input {
+    width: 100%;
+    border: 0;
+    outline: 0;
+    color: var(--simson-ink);
+    background: transparent;
+    font-size: 16px;
+    min-width: 0;
+  }
+
+  .smart-input-wrap input::placeholder {
+    color: rgba(238, 243, 239, .35);
+  }
+
+  .smart-route-label {
+    color: #8fe6d3;
+    font-size: 10px;
+    font-weight: 820;
+    letter-spacing: .4px;
+    white-space: nowrap;
+  }
+
+  .smart-call-btn {
+    border: 0;
+    border-radius: 15px;
+    color: white;
+    background: linear-gradient(135deg, #16a36f, #159fbc);
+    font-size: 13px;
+    font-weight: 850;
+    cursor: pointer;
+    box-shadow: none;
+    touch-action: manipulation;
+  }
+
+  .smart-call-btn:hover {
+    filter: brightness(1.06);
+  }
+
+  .smart-call-btn:disabled {
+    opacity: .45;
+    cursor: not-allowed;
+  }
+
+  .smart-meta {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    margin-top: 9px;
+    color: var(--simson-dim);
+    font-size: 10.5px;
+  }
+
+  .smart-trunk {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--simson-soft);
+  }
+
+  .smart-trunk input {
+    width: 78px;
+    min-height: 30px;
+    border-radius: 10px;
+    border: 1px solid var(--simson-stroke);
+    background: rgba(255,255,255,.035);
+    color: var(--simson-ink);
+    padding: 5px 8px;
+    outline: 0;
+  }
+
+  .smart-quick {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(118px, 1fr));
+    gap: 7px;
+  }
+
+  .smart-chip {
+    min-height: 54px;
+    border: 1px solid var(--simson-stroke);
+    border-radius: 14px;
+    background: var(--simson-surface-2);
+    color: var(--simson-ink);
+    cursor: pointer;
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    gap: 9px;
+    align-items: center;
+    text-align: left;
+    padding: 9px 10px;
+    touch-action: manipulation;
+  }
+
+  .smart-chip:hover {
+    border-color: rgba(34, 197, 160, .28);
+    background: rgba(34, 197, 160, .07);
+  }
+
+  .smart-chip:disabled {
+    opacity: .45;
+    cursor: not-allowed;
+  }
+
+  .smart-chip-icon {
+    width: 28px;
+    height: 28px;
+    display: inline-grid;
+    place-items: center;
+    border-radius: 10px;
+    background: rgba(255,255,255,.055);
+  }
+
+  .smart-chip-main {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 12px;
+    font-weight: 760;
+  }
+
+  .smart-chip-sub {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--simson-dim);
+    font-size: 10.5px;
+    margin-top: 1px;
+  }
+
+  .smart-users {
+    border: 1px solid var(--simson-stroke);
+    border-radius: 16px;
+    background: rgba(255,255,255,.025);
+    padding: 10px;
+  }
+
+  .smart-users-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 8px;
+  }
+
+  .smart-users-title {
+    color: var(--simson-soft);
+    font-size: 11px;
+    font-weight: 760;
+  }
+
+  .smart-users .user-list {
+    margin-bottom: 0;
+  }
+
+  .smart-users .user-item {
+    margin-bottom: 6px;
+  }
+
+  .smart-users .user-item:last-child {
+    margin-bottom: 0;
+  }
+
+  .call-panel {
+    display: grid;
+    gap: 11px;
+  }
+
+  .call-who {
+    font-size: 20px;
+  }
+
+  .call-meta {
+    margin-bottom: 0;
+  }
+
+  .call-context {
+    margin: 0;
+  }
+
+  .call-actions {
+    margin-top: 1px;
+  }
+
+  @media (max-width: 560px) {
+    .card {
+      padding: 13px;
+    }
+    .smart-head,
+    .smart-meta {
+      align-items: flex-start;
+      flex-direction: column;
+    }
+    .smart-row {
+      grid-template-columns: 1fr;
+    }
+    .smart-call-btn {
+      min-height: 48px;
+    }
+    .smart-quick {
+      grid-template-columns: 1fr;
+    }
+    .tabs {
+      max-width: none;
     }
   }
 `;
@@ -3008,6 +3351,165 @@ class SimsonCard extends HTMLElement {
     return ["INPUT", "TEXTAREA", "SELECT"].includes(el.tagName);
   }
 
+  _smartDialRoute(value) {
+    const raw = String(value || "").trim();
+    if (!raw) return { kind: "ready", label: "Ready", icon: "\u{1F50E}", hint: "Type node, extension, or phone number" };
+    const lowered = raw.toLowerCase();
+    const knownNode = this._getNodeTargets().find(t =>
+      String(t.node_id || t.id || "").toLowerCase() === lowered ||
+      String(t.label || "").toLowerCase() === lowered
+    );
+    if (knownNode || /^[a-z][a-z0-9_-]{1,}$/i.test(raw)) {
+      return { kind: "node", label: "HAOS node", icon: "\u{1F3E0}", hint: "Rings a Home Assistant node/user" };
+    }
+    const normalized = raw.replace(/[^\d+]/g, "");
+    if (/^sip:/i.test(raw) || /^ext:/i.test(raw)) {
+      return { kind: "sip", label: "SIP", icon: "\u{260E}", hint: "Calls an internal SIP extension" };
+    }
+    if (normalized.startsWith("+") || normalized.replace(/\D/g, "").length >= 7) {
+      return { kind: "pstn", label: "Gateway", icon: "\u{1F4F2}", hint: `Uses trunk ${this._effectivePstnTrunk()}` };
+    }
+    if (/^\d{1,6}$/.test(normalized)) {
+      return { kind: "sip", label: "SIP", icon: "\u{260E}", hint: "Calls an internal SIP extension" };
+    }
+    return { kind: "node", label: "HAOS node", icon: "\u{1F3E0}", hint: "Rings a Home Assistant node/user" };
+  }
+
+  _dialSmartValue(value, trunk = "") {
+    const raw = String(value || "").trim();
+    if (!raw) return;
+    const route = this._smartDialRoute(raw);
+    this._nodeInputDraft = raw;
+    if (route.kind === "pstn") {
+      const activeTrunk = String(trunk || this._pstnTrunkDraft || this._effectivePstnTrunk(false) || "").trim();
+      this._pstnDialDraft = raw;
+      this._pstnTrunkDraft = activeTrunk;
+      this._dialPSTNNumber(raw, activeTrunk);
+      return;
+    }
+    if (route.kind === "sip") {
+      const ext = raw.replace(/^sip:/i, "").replace(/^ext:/i, "").trim();
+      this._sipDialDraft = ext;
+      this._dialSIPExtension(ext);
+      return;
+    }
+    this._selectedNode = raw;
+    this._userPickerNodeId = raw;
+    this._userPickerTargetId = "";
+    this._callService("get_remote_users", { node_id: raw });
+  }
+
+  _renderSmartComposer(connected, nodeId) {
+    const nodeTargets = this._getNodeTargets();
+    const nonNodeTargets = this._getNonNodeTargets();
+    const knownNodes = new Set();
+    nodeTargets.forEach(t => knownNodes.add(t.node_id || t.id));
+    (this._config.target_nodes || []).forEach(n => knownNodes.add(n));
+
+    const smartValue = this._nodeInputDraft || "";
+    const route = this._smartDialRoute(smartValue);
+    const trunk = this._pstnTrunkDraft || this._effectivePstnTrunk();
+    const quickTargets = [
+      ...nodeTargets.slice(0, 3).map(t => ({ ...t, type: "node" })),
+      ...nonNodeTargets.filter(t => ["sip", "asterisk", "gateway"].includes(t.type || "")).slice(0, 5),
+    ].slice(0, 8);
+
+    let usersHtml = "";
+    if (this._selectedNode) {
+      if (this._usersLoading) {
+        usersHtml = `<div class="smart-users"><div class="users-loading">Checking users on ${this._esc(this._selectedNode)}...</div></div>`;
+      } else {
+        const users = this._remoteUsers.length > 0
+          ? this._remoteUsers
+          : (this._usersCache[this._selectedNode]?.users || []);
+        usersHtml = `
+          <div class="smart-users">
+            <div class="smart-users-head">
+              <div class="smart-users-title">Users on ${this._esc(this._selectedNode)}</div>
+              <button class="btn-refresh" id="btn-refresh-users" title="Refresh user list">&#x21BB;</button>
+            </div>
+            <div class="user-list">
+              <div class="user-item all-users" data-action="call-all">
+                <div class="user-avatar">\u{260E}</div>
+                <div class="user-info">
+                  <div class="user-name">Call everyone</div>
+                  <div class="user-meta">Ring all users on this node</div>
+                </div>
+                <div class="call-icon">\u2192</div>
+              </div>
+              ${users.map(u => `
+                <div class="user-item" data-uid="${this._esc(u.user_id)}" data-uname="${this._esc(u.user_name)}">
+                  <div class="user-avatar">${this._esc((u.user_name || "?").trim().charAt(0).toUpperCase() || "?")}</div>
+                  <div class="user-info">
+                    <div class="user-name">${this._esc(u.user_name)}</div>
+                    <div class="user-meta">Direct user call</div>
+                  </div>
+                  <div class="call-icon">\u2192</div>
+                </div>
+              `).join("")}
+            </div>
+          </div>`;
+      }
+    }
+
+    return `
+      <div class="smart-console">
+        <div class="smart-card">
+          <div class="smart-head">
+            <div>
+              <div class="smart-kicker">Unified dialer</div>
+              <div class="smart-title">Call anything from one field</div>
+              <div class="smart-help">Type a HAOS node, SIP extension, or outside number. Simson chooses the right route.</div>
+            </div>
+            <div class="smart-node">${this._esc(nodeId)}</div>
+          </div>
+          <div class="smart-row">
+            <div class="smart-input-wrap">
+              <span class="smart-route-icon">${route.icon}</span>
+              <input id="node-input" data-smart-composer="1" type="text"
+                placeholder="office2, 1025, 100, +91..."
+                value="${this._esc(smartValue)}" ${!connected ? "disabled" : ""}
+                list="node-suggestions" autocomplete="off" />
+              <span class="smart-route-label">${this._esc(route.label)}</span>
+            </div>
+            <button class="smart-call-btn" id="btn-call-manual" data-smart-composer="1" ${!connected ? "disabled" : ""}>Call</button>
+          </div>
+          <div class="smart-meta">
+            <span>${this._esc(route.hint)}</span>
+            <label class="smart-trunk">Gateway
+              <input id="pstn-trunk-input" type="text" value="${this._esc(trunk)}" title="Default outside trunk" ${!connected ? "disabled" : ""} />
+            </label>
+          </div>
+        </div>
+        <datalist id="node-suggestions">
+          ${[...knownNodes].map(n => `<option value="${this._esc(n)}">`).join("")}
+        </datalist>
+        ${quickTargets.length ? `
+          <div class="smart-quick">
+            ${quickTargets.map(t => {
+              const type = t.type || "node";
+              const icon = type === "gateway" ? "\u{1F4F2}" : type === "node" ? "\u{1F3E0}" : "\u{260E}";
+              const title = t.label || t.id;
+              const subtitle = type === "gateway"
+                ? `Gateway ${t.extension || t.id}`
+                : type === "node"
+                ? `Node ${t.node_id || t.id}`
+                : `SIP ${t.extension || t.id}`;
+              return `<button class="smart-chip btn-target"
+                data-tid="${this._esc(t.id)}" data-ttype="${this._esc(type)}"
+                data-tnodeid="${this._esc(t.node_id || t.id)}" ${!connected ? "disabled" : ""}>
+                <span class="smart-chip-icon">${icon}</span>
+                <span>
+                  <span class="smart-chip-main">${this._esc(title)}</span>
+                  <span class="smart-chip-sub">${this._esc(subtitle)}</span>
+                </span>
+              </button>`;
+            }).join("")}
+          </div>` : ""}
+        ${usersHtml}
+      </div>`;
+  }
+
   _render() {
     const nodeId = this._nodeId();
     if (!nodeId) {
@@ -3285,6 +3787,9 @@ class SimsonCard extends HTMLElement {
     // Dial tab content
     let dialHtml = "";
     if (this._activeTab === "dial" && isIdle) {
+      dialHtml = this._renderSmartComposer(connected, nodeId);
+    }
+    if (false && this._activeTab === "dial" && isIdle) {
       const nodeTargets = this._getNodeTargets();
       const nonNodeTargets = this._getNonNodeTargets();
 
@@ -3649,13 +4154,18 @@ class SimsonCard extends HTMLElement {
     // Node input
     const nodeInput = root.querySelector("#node-input");
     if (nodeInput) {
+      const smartComposer = nodeInput.dataset.smartComposer === "1";
       nodeInput.addEventListener("input", (e) => {
         this._nodeInputDraft = e.target.value;
-        this._selectedNode = e.target.value;
+        if (!smartComposer) this._selectedNode = e.target.value;
       });
       nodeInput.addEventListener("change", (e) => {
         const val = e.target.value.trim();
         this._nodeInputDraft = val;
+        if (smartComposer) {
+          this._render();
+          return;
+        }
         this._selectedNode = val;
         if (val) {
           this._fetchRemoteUsers(val);
@@ -3669,6 +4179,10 @@ class SimsonCard extends HTMLElement {
           const val = e.target.value.trim();
           if (val) {
             this._nodeInputDraft = val;
+            if (smartComposer) {
+              this._dialSmartValue(val, root.querySelector("#pstn-trunk-input")?.value || "");
+              return;
+            }
             this._selectedNode = val;
             this._fetchRemoteUsers(val);
             this._render();
@@ -3683,8 +4197,13 @@ class SimsonCard extends HTMLElement {
 
     // Manual call button
     this._bindAction(root.querySelector("#btn-call-manual"), "call-manual", () => {
-      const val = root.querySelector("#node-input")?.value?.trim();
+      const input = root.querySelector("#node-input");
+      const val = input?.value?.trim();
       if (val) {
+        if (input?.dataset.smartComposer === "1") {
+          this._dialSmartValue(val, root.querySelector("#pstn-trunk-input")?.value || "");
+          return;
+        }
         this._nodeInputDraft = val;
         this._selectedNode = val;
         this._userPickerNodeId = val;
