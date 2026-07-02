@@ -1,7 +1,9 @@
 /**
- * Simson Call Relay — Lovelace Card v4.8.10
+ * Simson Call Relay — Lovelace Card v4.8.11
  *
  * Full WebRTC voice calling between HA instances + Asterisk SIP phone support.
+ * v4.8.11: Keep locally answered node calls alive while HA active status races
+ *          back, and pair with HAOS ring-code fallback isolation.
  * v4.8.10: Cache-bust frontend autoloading and harden duplicate script loading
  *          / legacy card config so refreshes do not show Configuration error.
  * v4.8.9: Use the addon/site default gateway trunk instead of silently
@@ -63,7 +65,7 @@
  *     - node_id: office2
  */
 
-const VERSION = "4.8.10";
+const VERSION = "4.8.11";
 
 // Default ICE servers (fallback when /api/webrtc-config is unavailable).
 const ICE_SERVERS = [
@@ -1781,6 +1783,7 @@ class SimsonCard extends HTMLElement {
     this._makingOffer = false;
     this._pendingCandidates = [];
     this._answeredByMe = false;   // track if this user answered the call
+    this._answerPendingCallId = null;
     this._incomingCallTimeout = null;  // timeout to clear phantom incoming calls
     this._lastIncomingCall = null;     // "from_node_id|call_type" for deduplication
     this._lastIncomingCallTime = 0;    // timestamp of last incoming call
@@ -1978,7 +1981,8 @@ class SimsonCard extends HTMLElement {
     if (!isMyEvent) return;
     if (status === "active") {
       console.log("[Simson] call_status active", { call_id, call_type, sip_bridge_id, direction, remote_node_id });
-      if (direction === "incoming" && !this._answeredByMe) {
+      const answeredLocally = this._answeredByMe || this._answerPendingCallId === call_id;
+      if (direction === "incoming" && !answeredLocally) {
         console.log("[Simson] Incoming call became active elsewhere; not auto-answering browser card", { call_id });
         this._stopRingtone();
         this._removePopup();
@@ -2006,6 +2010,7 @@ class SimsonCard extends HTMLElement {
         return;
       }
       this._currentCallId = call_id;
+      this._answerPendingCallId = null;
       this._currentRemoteNode = remote_node_id;
       if (sip_bridge_id) this._sipBridgeId = sip_bridge_id;
       const isSipCall = call_type === "sip" ||
@@ -2043,6 +2048,7 @@ class SimsonCard extends HTMLElement {
       this._currentRemoteNode = null;
       this._isCaller = false;
       this._answeredByMe = false;
+      this._answerPendingCallId = null;
       // Refresh history after call ends.
       setTimeout(() => this._loadHistory(), 2000);
       this._render();
@@ -2282,12 +2288,14 @@ class SimsonCard extends HTMLElement {
     this._sipBridgeId = null;
     this._isCaller = false;
     this._answeredByMe = false;
+    this._answerPendingCallId = null;
     this._prevCallState = "idle";
     this._render();
   }
 
   _answer() {
     const callId = this._activeCallAttr("call_id") || this._currentCallId;
+    if (!callId) return;
     // Clear incoming timeout since call is being answered.
     if (this._incomingCallTimeout) {
       clearTimeout(this._incomingCallTimeout);
@@ -2298,6 +2306,8 @@ class SimsonCard extends HTMLElement {
     this._dismissBrowserNotification();
     this._callStart = Date.now();
     this._answeredByMe = true;
+    this._answerPendingCallId = callId;
+    this._currentCallId = callId;
     // Cancel any incoming suppression so the call can proceed normally
     this._incomingSuppressUntil = 0;
     this._callService("answer_call", {
@@ -2331,6 +2341,7 @@ class SimsonCard extends HTMLElement {
     this._isCaller = false;
     this._callStart = null;
     this._answeredByMe = false;
+    this._answerPendingCallId = null;
     this._prevCallState = "idle"; // reset transition tracking
     // Suppress any new incoming call popup for 8 s so the phone spam
     // doesn't immediately re-open the popup after the user dismisses it.
@@ -2637,6 +2648,7 @@ class SimsonCard extends HTMLElement {
     this._pendingCandidates = [];
     this._isCaller = false;
     this._answeredByMe = false;
+    this._answerPendingCallId = null;
     this._iceRestartAttempts = 0;
     // Tear down SIP UA if active (SIP phone call path)
     this._cleanupSIPUA();
