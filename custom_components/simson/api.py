@@ -41,6 +41,26 @@ class SimsonApiClient:
             resp.raise_for_status()
             return await resp.json()
 
+    async def _post_first(self, paths: tuple[str, ...], data: dict | None = None) -> dict:
+        """POST to the first route that exists.
+
+        This keeps HA service calls working during addon/integration rolling
+        updates where one side still exposes an older call endpoint name.
+        Non-404 failures are real call failures and are surfaced immediately.
+        """
+        last_not_found: aiohttp.ClientResponseError | None = None
+        for path in paths:
+            try:
+                return await self._post(path, data)
+            except aiohttp.ClientResponseError as err:
+                if err.status != 404:
+                    raise
+                last_not_found = err
+                logger.warning("Simson addon endpoint %s not found; trying next compatible route", path)
+        if last_not_found:
+            raise last_not_found
+        raise RuntimeError("No Simson endpoint paths supplied")
+
     async def health(self) -> dict:
         return await self._get("/api/health")
 
@@ -75,7 +95,7 @@ class SimsonApiClient:
             data["target_user_name"] = target_user_name
         if caller_user_id:
             data["caller_user_id"] = caller_user_id
-        return await self._post("/api/call", data)
+        return await self._post_first(("/api/call", "/api/make-call", "/api/calls"), data)
 
     async def call_sip_phone(self, extension: str, caller_id: str = "",
                              target_user_id: str = "",
@@ -96,7 +116,7 @@ class SimsonApiClient:
             data["target_user_name"] = target_user_name
         if caller_user_id:
             data["caller_user_id"] = caller_user_id
-        return await self._post("/api/call", data)
+        return await self._post_first(("/api/call", "/api/make-call", "/api/calls"), data)
 
     async def call_phone_number(self, phone_number: str, trunk: str = "",
                                 caller_id: str = "",
@@ -109,7 +129,7 @@ class SimsonApiClient:
             data["caller_id"] = caller_id
         if caller_user_id:
             data["caller_user_id"] = caller_user_id
-        return await self._post("/api/call", data)
+        return await self._post_first(("/api/call", "/api/make-call", "/api/calls"), data)
 
     async def answer_call(self, call_id: str, answered_by_user_id: str = "") -> dict:
         data = {"call_id": call_id}
