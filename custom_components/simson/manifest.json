@@ -1,12 +1,17 @@
 {
   "domain": "simson",
   "name": "Simson Call Relay",
-  "codeowners": ["@nitish-mp3"],
+  "codeowners": [
+    "@nitish-mp3"
+  ],
   "config_flow": true,
   "documentation": "https://github.com/nitish-mp3/simson-ig",
   "integration_type": "service",
   "iot_class": "local_polling",
-  "version": "2.11.4",
+  "version": "2.11.6",
   "requirements": [],
-  "dependencies": ["frontend", "http"]
+  "dependencies": [
+    "frontend",
+    "http"
+  ]
 }

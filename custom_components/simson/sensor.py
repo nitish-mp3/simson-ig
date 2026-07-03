@@ -137,9 +137,12 @@ class SimsonCallStateSensor(SimsonBaseSensor):
                 "remote_node_id": active.get("remote_node_id", ""),
                 "remote_label": active.get("remote_label", ""),
                 "remote_number": active.get("remote_number", ""),
+                "source_extension": active.get("source_extension", ""),
+                "extension": active.get("extension", ""),
+                "context": active.get("context", ""),
+                "trunk": active.get("trunk", ""),
                 "call_type": active.get("call_type", ""),
                 "sip_bridge_id": active.get("sip_bridge_id", ""),
-                "source_extension": active.get("source_extension", ""),
                 "target_extension": active.get("target_extension", ""),
                 "source_auto_mode": active.get("source_auto_mode", ""),
                 "target_auto_mode": active.get("target_auto_mode", ""),
@@ -157,6 +160,8 @@ class SimsonCallStateSensor(SimsonBaseSensor):
                 "answered_by_user_name": active.get("answered_by_user_name", ""),
                 "forwarded_to": active.get("forwarded_to", ""),
                 "forwarded_extension": active.get("forwarded_extension", ""),
+                "routing": active.get("routing", {}),
+                "raw": active,
             }
         return {}
 
@@ -258,6 +263,10 @@ class SimsonLastCallEventSensor(SimsonBaseSensor):
             "started_at": event.get("started_at", ""),
             "answered_at": event.get("answered_at", ""),
             "ended_at": event.get("ended_at", ""),
+            "extension": event.get("extension", ""),
+            "context": event.get("context", ""),
+            "trunk": event.get("trunk", ""),
+            "raw": event,
         }
 
 
@@ -311,4 +320,5 @@ class SimsonLastAutomationEventSensor(SimsonBaseSensor):
             "bridge_id": event.get("bridge_id", ""),
             "results": event.get("results", []),
             "retry_after": event.get("retry_after", ""),
+            "raw": event,
         }

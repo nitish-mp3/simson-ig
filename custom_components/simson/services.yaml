@@ -36,10 +36,9 @@ make_call:
         text:
     trunk:
       name: SIP/PSTN Trunk
-      description: Gateway/trunk endpoint to use for outside calls.
+      description: Gateway/trunk endpoint to use for outside calls. Leave blank to use the addon's default gateway.
       required: false
-      default: "7009"
-      example: "7009"
+      example: "7013"
       selector:
         text:
     caller_id:
@@ -49,9 +48,89 @@ make_call:
       example: "\"Front Door\" <1602>"
       selector:
         text:
+    target_user_id:
+      name: Target User ID
+      description: Optional Home Assistant user ID when calling one specific dashboard user.
+      required: false
+      selector:
+        text:
+    target_user_name:
+      name: Target User Name
+      description: Optional display name for the targeted dashboard user.
+      required: false
+      selector:
+        text:
     caller_user_id:
       name: Caller User ID
       description: Optional Home Assistant user ID for ownership/busy tracking.
+      required: false
+      selector:
+        text:
+
+call_sip_phone:
+  name: Call SIP Phone
+  description: Call a SIP extension through Simson/Asterisk. Use this for automations instead of guessing target_id values.
+  fields:
+    extension:
+      name: SIP Extension
+      description: SIP extension to call, for example 1027 or 1603.
+      required: true
+      example: "1027"
+      selector:
+        text:
+    caller_id:
+      name: Caller ID
+      description: Optional caller ID shown on the SIP phone.
+      required: false
+      example: '"Home Assistant" <100>'
+      selector:
+        text:
+    target_user_id:
+      name: Target User ID
+      description: Optional HA user ID when this call should belong to one dashboard user.
+      required: false
+      selector:
+        text:
+    target_user_name:
+      name: Target User Name
+      description: Optional display name for the targeted HA user.
+      required: false
+      selector:
+        text:
+    caller_user_id:
+      name: Caller User ID
+      description: Optional HA user ID for ownership/busy tracking.
+      required: false
+      selector:
+        text:
+
+call_phone_number:
+  name: Call Outside Phone Number
+  description: Dial a mobile/landline/PSTN number through the selected or default gateway trunk.
+  fields:
+    phone_number:
+      name: Phone Number
+      description: Outside number to dial. Spaces and leading + are accepted.
+      required: true
+      example: "+919123208334"
+      selector:
+        text:
+    trunk:
+      name: Gateway Trunk
+      description: Optional trunk extension. Leave blank to use the addon's default outside gateway.
+      required: false
+      example: "7013"
+      selector:
+        text:
+    caller_id:
+      name: Caller ID
+      description: Optional caller ID shown to the gateway/SIP side.
+      required: false
+      selector:
+        text:
+    caller_user_id:
+      name: Caller User ID
+      description: Optional HA user ID for ownership/busy tracking.
       required: false
       selector:
         text:

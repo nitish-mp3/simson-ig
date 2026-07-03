@@ -77,6 +77,40 @@ class SimsonApiClient:
             data["caller_user_id"] = caller_user_id
         return await self._post("/api/call", data)
 
+    async def call_sip_phone(self, extension: str, caller_id: str = "",
+                             target_user_id: str = "",
+                             target_user_name: str = "",
+                             caller_user_id: str = "") -> dict:
+        """Call a SIP extension through the addon's validated central SIP path."""
+        ext = str(extension or "").strip().replace("sip:", "")
+        data = {
+            "target_id": f"asterisk_{ext}",
+            "target_node_id": f"sip:{ext}",
+            "call_type": "sip",
+        }
+        if caller_id:
+            data["caller_id"] = caller_id
+        if target_user_id:
+            data["target_user_id"] = target_user_id
+        if target_user_name:
+            data["target_user_name"] = target_user_name
+        if caller_user_id:
+            data["caller_user_id"] = caller_user_id
+        return await self._post("/api/call", data)
+
+    async def call_phone_number(self, phone_number: str, trunk: str = "",
+                                caller_id: str = "",
+                                caller_user_id: str = "") -> dict:
+        """Call an outside/PSTN number through the selected or default gateway."""
+        data = {"phone_number": str(phone_number or "").strip(), "call_type": "sip"}
+        if trunk:
+            data["trunk"] = trunk
+        if caller_id:
+            data["caller_id"] = caller_id
+        if caller_user_id:
+            data["caller_user_id"] = caller_user_id
+        return await self._post("/api/call", data)
+
     async def answer_call(self, call_id: str, answered_by_user_id: str = "") -> dict:
         data = {"call_id": call_id}
         if answered_by_user_id:

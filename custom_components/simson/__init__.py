@@ -11,7 +11,7 @@ import voluptuous as vol
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import Event, HomeAssistant, ServiceCall, callback
-from homeassistant.exceptions import ConfigEntryNotReady
+from homeassistant.exceptions import ConfigEntryNotReady, HomeAssistantError
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.components.http import HomeAssistantView, StaticPathConfig
 from homeassistant.components.frontend import add_extra_js_url
@@ -24,6 +24,8 @@ from .const import (
     CONF_ADDON_URL,
     PLATFORMS,
     SERVICE_MAKE_CALL,
+    SERVICE_CALL_SIP_PHONE,
+    SERVICE_CALL_PHONE_NUMBER,
     SERVICE_ANSWER_CALL,
     SERVICE_REJECT_CALL,
     SERVICE_HANGUP_CALL,
@@ -114,7 +116,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 unsub()
         # Unregister services when last entry is removed.
         if not hass.data[DOMAIN]:
-            for svc in (SERVICE_MAKE_CALL, SERVICE_ANSWER_CALL, SERVICE_REJECT_CALL,
+            for svc in (SERVICE_MAKE_CALL, SERVICE_CALL_SIP_PHONE, SERVICE_CALL_PHONE_NUMBER, SERVICE_ANSWER_CALL, SERVICE_REJECT_CALL,
                         SERVICE_HANGUP_CALL, SERVICE_WEBRTC_SIGNAL, SERVICE_GET_TARGETS,
                         SERVICE_USER_HEARTBEAT, SERVICE_GET_REMOTE_USERS,
                         SERVICE_GET_CALL_HISTORY, SERVICE_RUN_TRIGGER,
@@ -192,6 +194,15 @@ def _register_services(hass: HomeAssistant, client: SimsonApiClient) -> None:
             if coordinator:
                 hass.async_create_task(coordinator.async_request_refresh())
 
+    def raise_service_error(action: str, err: Exception) -> None:
+        """Surface addon/API failures in HA instead of silently logging them."""
+        message = f"Simson {action} failed: {err}"
+        logger.error(message)
+        raise HomeAssistantError(message) from err
+
+    def fire_service_result(service: str, result: dict) -> None:
+        hass.bus.async_fire("simson_service_result", {"service": service, **(result or {})})
+
     async def handle_make_call(call: ServiceCall) -> None:
         target = call.data.get("target_node_id", "")
         target_id = call.data.get("target_id", "")
@@ -215,35 +226,77 @@ def _register_services(hass: HomeAssistant, client: SimsonApiClient) -> None:
                 caller_user_id=caller_user_id,
             )
             logger.info("Call initiated: %s", result)
+            fire_service_result(SERVICE_MAKE_CALL, result)
             refresh_all_entries()
         except Exception as err:
-            logger.error("Failed to make call: %s", err)
+            raise_service_error("make_call", err)
+
+    async def handle_call_sip_phone(call: ServiceCall) -> None:
+        extension = str(call.data["extension"]).strip().replace("sip:", "")
+        caller_id = call.data.get("caller_id", "")
+        target_user_id = call.data.get("target_user_id", "")
+        target_user_name = call.data.get("target_user_name", "")
+        caller_user_id = call.data.get("caller_user_id", "")
+        try:
+            result = await client.call_sip_phone(
+                extension=extension,
+                caller_id=caller_id,
+                target_user_id=target_user_id,
+                target_user_name=target_user_name,
+                caller_user_id=caller_user_id,
+            )
+            logger.info("SIP phone call initiated: %s", result)
+            fire_service_result(SERVICE_CALL_SIP_PHONE, result)
+            refresh_all_entries()
+        except Exception as err:
+            raise_service_error(f"call_sip_phone {extension}", err)
+
+    async def handle_call_phone_number(call: ServiceCall) -> None:
+        phone_number = str(call.data["phone_number"]).strip()
+        trunk = str(call.data.get("trunk", "") or "").strip()
+        caller_id = call.data.get("caller_id", "")
+        caller_user_id = call.data.get("caller_user_id", "")
+        try:
+            result = await client.call_phone_number(
+                phone_number=phone_number,
+                trunk=trunk,
+                caller_id=caller_id,
+                caller_user_id=caller_user_id,
+            )
+            logger.info("Outside phone call initiated: %s", result)
+            fire_service_result(SERVICE_CALL_PHONE_NUMBER, result)
+            refresh_all_entries()
+        except Exception as err:
+            raise_service_error(f"call_phone_number {phone_number}", err)
 
     async def handle_answer_call(call: ServiceCall) -> None:
         call_id = call.data["call_id"]
         answered_by_user_id = call.data.get("answered_by_user_id", "")
         try:
-            await client.answer_call(call_id, answered_by_user_id=answered_by_user_id)
+            result = await client.answer_call(call_id, answered_by_user_id=answered_by_user_id)
+            fire_service_result(SERVICE_ANSWER_CALL, result)
             refresh_all_entries()
         except Exception as err:
-            logger.error("Failed to answer call: %s", err)
+            raise_service_error("answer_call", err)
 
     async def handle_reject_call(call: ServiceCall) -> None:
         call_id = call.data["call_id"]
         reason = call.data.get("reason", "rejected")
         try:
-            await client.reject_call(call_id, reason)
+            result = await client.reject_call(call_id, reason)
+            fire_service_result(SERVICE_REJECT_CALL, result)
             refresh_all_entries()
         except Exception as err:
-            logger.error("Failed to reject call: %s", err)
+            raise_service_error("reject_call", err)
 
     async def handle_hangup_call(call: ServiceCall) -> None:
         call_id = call.data["call_id"]
         try:
-            await client.hangup_call(call_id)
+            result = await client.hangup_call(call_id)
+            fire_service_result(SERVICE_HANGUP_CALL, result)
             refresh_all_entries()
         except Exception as err:
-            logger.error("Failed to hangup call: %s", err)
+            raise_service_error("hangup_call", err)
 
     async def handle_transfer_call(call: ServiceCall) -> None:
         call_id = call.data["call_id"]
@@ -251,15 +304,16 @@ def _register_services(hass: HomeAssistant, client: SimsonApiClient) -> None:
         target_user_id = call.data.get("target_user_id", "")
         target_user_name = call.data.get("target_user_name", "")
         try:
-            await client.transfer_call(
+            result = await client.transfer_call(
                 call_id,
                 target_node_id,
                 target_user_id=target_user_id,
                 target_user_name=target_user_name,
             )
+            fire_service_result(SERVICE_TRANSFER_CALL, result)
             refresh_all_entries()
         except Exception as err:
-            logger.error("Failed to transfer call: %s", err)
+            raise_service_error("transfer_call", err)
 
     if not hass.services.has_service(DOMAIN, SERVICE_MAKE_CALL):
         hass.services.async_register(
@@ -278,6 +332,35 @@ def _register_services(hass: HomeAssistant, client: SimsonApiClient) -> None:
                 vol.Optional("caller_user_id", default=""): str,
             }),
         )
+
+    if not hass.services.has_service(DOMAIN, SERVICE_CALL_SIP_PHONE):
+        hass.services.async_register(
+            DOMAIN,
+            SERVICE_CALL_SIP_PHONE,
+            handle_call_sip_phone,
+            schema=vol.Schema({
+                vol.Required("extension"): str,
+                vol.Optional("caller_id", default=""): str,
+                vol.Optional("target_user_id", default=""): str,
+                vol.Optional("target_user_name", default=""): str,
+                vol.Optional("caller_user_id", default=""): str,
+            }),
+        )
+
+    if not hass.services.has_service(DOMAIN, SERVICE_CALL_PHONE_NUMBER):
+        hass.services.async_register(
+            DOMAIN,
+            SERVICE_CALL_PHONE_NUMBER,
+            handle_call_phone_number,
+            schema=vol.Schema({
+                vol.Required("phone_number"): str,
+                vol.Optional("trunk", default=""): str,
+                vol.Optional("caller_id", default=""): str,
+                vol.Optional("caller_user_id", default=""): str,
+            }),
+        )
+
+    if not hass.services.has_service(DOMAIN, SERVICE_ANSWER_CALL):
         hass.services.async_register(
             DOMAIN,
             SERVICE_ANSWER_CALL,
@@ -287,6 +370,8 @@ def _register_services(hass: HomeAssistant, client: SimsonApiClient) -> None:
                 vol.Optional("answered_by_user_id", default=""): str,
             }),
         )
+
+    if not hass.services.has_service(DOMAIN, SERVICE_REJECT_CALL):
         hass.services.async_register(
             DOMAIN,
             SERVICE_REJECT_CALL,
@@ -296,23 +381,14 @@ def _register_services(hass: HomeAssistant, client: SimsonApiClient) -> None:
                 vol.Optional("reason", default="rejected"): str,
             }),
         )
+
+    if not hass.services.has_service(DOMAIN, SERVICE_HANGUP_CALL):
         hass.services.async_register(
             DOMAIN,
             SERVICE_HANGUP_CALL,
             handle_hangup_call,
             schema=vol.Schema({
                 vol.Required("call_id"): str,
-            }),
-        )
-        hass.services.async_register(
-            DOMAIN,
-            SERVICE_TRANSFER_CALL,
-            handle_transfer_call,
-            schema=vol.Schema({
-                vol.Required("call_id"): str,
-                vol.Required("target_node_id"): str,
-                vol.Optional("target_user_id", default=""): str,
-                vol.Optional("target_user_name", default=""): str,
             }),
         )
 
@@ -372,9 +448,10 @@ def _register_services(hass: HomeAssistant, client: SimsonApiClient) -> None:
         try:
             result = await client.run_trigger(trigger_id)
             logger.info("Automation trigger initiated: %s", result)
+            fire_service_result(SERVICE_RUN_TRIGGER, result)
             refresh_all_entries()
         except Exception as err:
-            logger.error("Failed to run automation trigger %s: %s", trigger_id, err)
+            raise_service_error(f"run_trigger {trigger_id}", err)
 
     if not hass.services.has_service(DOMAIN, SERVICE_RUN_TRIGGER):
         hass.services.async_register(
@@ -403,14 +480,10 @@ def _register_services(hass: HomeAssistant, client: SimsonApiClient) -> None:
                 timeout_sec=timeout_sec,
             )
             logger.info("SIP intercom initiated: %s", result)
+            fire_service_result(SERVICE_CONNECT_SIP_PHONES, result)
             refresh_all_entries()
         except Exception as err:
-            logger.error(
-                "Failed to connect SIP phones %s -> %s: %s",
-                source_extension,
-                target_extension,
-                err,
-            )
+            raise_service_error(f"connect_sip_phones {source_extension}->{target_extension}", err)
 
     if not hass.services.has_service(DOMAIN, SERVICE_CONNECT_SIP_PHONES):
         hass.services.async_register(

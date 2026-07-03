@@ -18,6 +18,8 @@ EVENT_ERROR = "simson_error"
 
 # Service names
 SERVICE_MAKE_CALL = "make_call"
+SERVICE_CALL_SIP_PHONE = "call_sip_phone"
+SERVICE_CALL_PHONE_NUMBER = "call_phone_number"
 SERVICE_ANSWER_CALL = "answer_call"
 SERVICE_REJECT_CALL = "reject_call"
 SERVICE_HANGUP_CALL = "hangup_call"
