@@ -296,11 +296,13 @@ class SimsonLastAutomationEventSensor(SimsonBaseSensor):
             return {}
         return {
             "event_type": event.get("event_type", ""),
+            "action": event.get("action", ""),
             "trigger_id": event.get("trigger_id", ""),
             "label": event.get("label", ""),
             "status": event.get("status", ""),
             "phase": event.get("phase", ""),
             "reason": event.get("reason", ""),
+            "error": event.get("error", ""),
             "node_id": event.get("node_id", ""),
             "account_id": event.get("account_id", ""),
             "source": event.get("source", ""),

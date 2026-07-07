@@ -209,6 +209,11 @@ def _register_services(hass: HomeAssistant, client: SimsonApiClient) -> None:
         phone_number = call.data.get("phone_number", "")
         trunk = call.data.get("trunk", "")
         caller_id = call.data.get("caller_id", "")
+        source_extension = str(call.data.get("source_extension", "") or "").strip()
+        target_extension = str(call.data.get("target_extension", "") or "").strip()
+        source_auto_mode = normalize_auto_mode(call.data.get("source_auto_mode", "speaker"))
+        target_auto_mode = normalize_auto_mode(call.data.get("target_auto_mode", "speaker"))
+        timeout_sec = int(call.data.get("timeout_sec", 30) or 30)
         call_type = call.data.get("call_type", "voice")
         target_user_id = call.data.get("target_user_id", "")
         target_user_name = call.data.get("target_user_name", "")
@@ -221,6 +226,11 @@ def _register_services(hass: HomeAssistant, client: SimsonApiClient) -> None:
                 phone_number=phone_number,
                 trunk=trunk,
                 caller_id=caller_id,
+                source_extension=source_extension,
+                target_extension=target_extension,
+                source_auto_mode=source_auto_mode,
+                target_auto_mode=target_auto_mode,
+                timeout_sec=timeout_sec,
                 target_user_id=target_user_id,
                 target_user_name=target_user_name,
                 caller_user_id=caller_user_id,
@@ -326,6 +336,11 @@ def _register_services(hass: HomeAssistant, client: SimsonApiClient) -> None:
                 vol.Optional("phone_number", default=""): str,
                 vol.Optional("trunk", default=""): str,
                 vol.Optional("caller_id", default=""): str,
+                vol.Optional("source_extension", default=""): str,
+                vol.Optional("target_extension", default=""): str,
+                vol.Optional("source_auto_mode", default="speaker"): vol.In(["", "none", "normal", "answer", "speaker", "intercom"]),
+                vol.Optional("target_auto_mode", default="speaker"): vol.In(["", "none", "normal", "answer", "speaker", "intercom"]),
+                vol.Optional("timeout_sec", default=30): vol.All(int, vol.Range(min=5, max=120)),
                 vol.Optional("call_type", default="voice"): str,
                 vol.Optional("target_user_id", default=""): str,
                 vol.Optional("target_user_name", default=""): str,
@@ -649,6 +664,7 @@ def _register_live_event_sync(
         hass.bus.async_listen("simson_automation_triggered", update_automation_event),
         hass.bus.async_listen("simson_door_station_call", update_automation_event),
         hass.bus.async_listen("simson_sip_intercom", update_automation_event),
+        hass.bus.async_listen("simson_notification_action_result", update_automation_event),
     ]
     hass.data.setdefault(DOMAIN, {}).setdefault(entry.entry_id, {})["event_unsubs"] = unsubs
 
@@ -660,15 +676,57 @@ def _register_mobile_notification_actions(
 ) -> None:
     """Handle HA Companion actionable notification buttons for Simson calls."""
 
+    async def _run_action(action_name: str, call_id: str) -> None:
+        try:
+            if action_name == "answer":
+                result = await client.answer_call(call_id)
+            elif action_name == "decline":
+                result = await client.reject_call(call_id, "declined_from_notification")
+            elif action_name == "hangup":
+                result = await client.hangup_call(call_id)
+            else:
+                return
+
+            hass.bus.async_fire(
+                "simson_notification_action_result",
+                {"action": action_name, "call_id": call_id, **(result or {})},
+            )
+            for data in hass.data.get(DOMAIN, {}).values():
+                if not isinstance(data, dict):
+                    continue
+                coordinator = data.get("coordinator")
+                if coordinator:
+                    hass.async_create_task(coordinator.async_request_refresh())
+        except Exception as err:  # noqa: BLE001 - surface failures to HA automations/logs
+            logger.error(
+                "Simson notification action %s failed for call %s: %s",
+                action_name,
+                call_id,
+                err,
+            )
+            hass.bus.async_fire(
+                "simson_notification_action_result",
+                {
+                    "action": action_name,
+                    "call_id": call_id,
+                    "error": str(err),
+                },
+            )
+
     @callback
     def _handle_action_event(event: Event) -> None:
         action = str(event.data.get("action") or "").strip()
-        if action.startswith("SIMSON_ANSWER_"):
-            call_id = action.removeprefix("SIMSON_ANSWER_")
-            hass.async_create_task(client.answer_call(call_id))
-        elif action.startswith("SIMSON_DECLINE_"):
-            call_id = action.removeprefix("SIMSON_DECLINE_")
-            hass.async_create_task(client.reject_call(call_id, "declined_from_notification"))
+        prefixes = {
+            "SIMSON_ANSWER_": "answer",
+            "SIMSON_DECLINE_": "decline",
+            "SIMSON_HANGUP_": "hangup",
+        }
+        for prefix, action_name in prefixes.items():
+            if action.startswith(prefix):
+                call_id = action.removeprefix(prefix)
+                if call_id:
+                    hass.async_create_task(_run_action(action_name, call_id))
+                return
 
     unsub = hass.bus.async_listen("mobile_app_notification_action", _handle_action_event)
     hass.data.setdefault(DOMAIN, {}).setdefault(entry.entry_id, {})["notification_unsub"] = unsub

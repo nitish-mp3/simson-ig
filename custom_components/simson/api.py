@@ -58,7 +58,16 @@ class SimsonApiClient:
                 last_not_found = err
                 logger.warning("Simson addon endpoint %s not found; trying next compatible route", path)
         if last_not_found:
-            raise last_not_found
+            health = {}
+            try:
+                health = await self.health()
+            except Exception as health_err:
+                health = {"health_error": str(health_err)}
+            raise RuntimeError(
+                "Simson addon does not expose a POST call API. "
+                f"Tried {', '.join(paths)} on {self._base}. "
+                f"Addon health: {health}. Update/restart the Simson addon so it exposes /api/call."
+            ) from last_not_found
         raise RuntimeError("No Simson endpoint paths supplied")
 
     async def health(self) -> dict:
@@ -75,6 +84,11 @@ class SimsonApiClient:
                         phone_number: str = "",
                         trunk: str = "",
                         caller_id: str = "",
+                        source_extension: str = "",
+                        target_extension: str = "",
+                        source_auto_mode: str = "speaker",
+                        target_auto_mode: str = "speaker",
+                        timeout_sec: int = 30,
                         target_user_id: str = "",
                         target_user_name: str = "",
                         caller_user_id: str = "") -> dict:
@@ -87,6 +101,14 @@ class SimsonApiClient:
             data["trunk"] = trunk
         if caller_id:
             data["caller_id"] = caller_id
+        if source_extension:
+            data["source_extension"] = source_extension
+        if target_extension:
+            data["target_extension"] = target_extension
+        if source_extension or target_extension:
+            data["source_auto_mode"] = source_auto_mode
+            data["target_auto_mode"] = target_auto_mode
+            data["timeout_sec"] = timeout_sec
         if target_node_id:
             data["target_node_id"] = target_node_id
         if target_user_id:
@@ -141,7 +163,7 @@ class SimsonApiClient:
         return await self._post("/api/reject", {"call_id": call_id, "reason": reason})
 
     async def hangup_call(self, call_id: str) -> dict:
-        return await self._post("/api/hangup", {"call_id": call_id})
+        return await self._post("/api/hangup", {"call_id": call_id, "explicit": True})
 
     async def transfer_call(self, call_id: str, target_node_id: str,
                             target_user_id: str = "",

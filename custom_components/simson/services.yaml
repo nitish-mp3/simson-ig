@@ -48,6 +48,55 @@ make_call:
       example: "\"Front Door\" <1602>"
       selector:
         text:
+    source_extension:
+      name: Source SIP Extension
+      description: Optional SIP extension to call first when creating a direct SIP intercom/bridge. Use with Target SIP Extension.
+      required: false
+      example: "1027"
+      selector:
+        text:
+    target_extension:
+      name: Target SIP Extension
+      description: Optional SIP extension to bridge with the source extension.
+      required: false
+      example: "1603"
+      selector:
+        text:
+    source_auto_mode:
+      name: Source Auto Mode
+      description: Optional answer/speaker hint for the source extension during SIP intercom calls.
+      default: "speaker"
+      selector:
+        select:
+          options:
+            - ""
+            - "none"
+            - "normal"
+            - "answer"
+            - "speaker"
+            - "intercom"
+    target_auto_mode:
+      name: Target Auto Mode
+      description: Optional answer/speaker hint for the target extension during SIP intercom calls.
+      default: "speaker"
+      selector:
+        select:
+          options:
+            - ""
+            - "none"
+            - "normal"
+            - "answer"
+            - "speaker"
+            - "intercom"
+    timeout_sec:
+      name: SIP Intercom Timeout
+      description: Ring timeout in seconds when connecting two SIP extensions.
+      default: 30
+      selector:
+        number:
+          min: 5
+          max: 120
+          mode: box
     target_user_id:
       name: Target User ID
       description: Optional Home Assistant user ID when calling one specific dashboard user.
