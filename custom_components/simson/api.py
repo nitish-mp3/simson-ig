@@ -74,7 +74,7 @@ class SimsonApiClient:
             except (aiohttp.ClientResponseError, aiohttp.ClientConnectorError, TimeoutError) as err:
                 last_err = err
                 if isinstance(err, aiohttp.ClientResponseError):
-                    if err.status not in (403, 404):
+                    if err.status != 404:
                         raise
                     last_http_compat_err = err
         if last_err:
@@ -98,7 +98,7 @@ class SimsonApiClient:
             except (aiohttp.ClientResponseError, aiohttp.ClientConnectorError, TimeoutError) as err:
                 last_err = err
                 if isinstance(err, aiohttp.ClientResponseError):
-                    if err.status not in (403, 404):
+                    if err.status != 404:
                         raise
                     last_http_compat_err = err
         if last_err:
@@ -119,7 +119,7 @@ class SimsonApiClient:
             try:
                 return await self._post(path, data)
             except aiohttp.ClientResponseError as err:
-                if err.status not in (403, 404):
+                if err.status != 404:
                     raise
                 last_compatible_error = err
                 logger.warning(
@@ -163,6 +163,9 @@ class SimsonApiClient:
                         target_user_id: str = "",
                         target_user_name: str = "",
                         caller_user_id: str = "") -> dict:
+        if target_extension and not source_extension and str(target_id or "").strip().isdigit():
+            source_extension = str(target_id).strip()
+            target_id = ""
         data = {"call_type": call_type}
         if target_id:
             data["target_id"] = target_id
