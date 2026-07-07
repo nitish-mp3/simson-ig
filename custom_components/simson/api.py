@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit, urlunsplit
 
 import aiohttp
 
@@ -16,6 +16,26 @@ class SimsonApiClient:
     def __init__(self, base_url: str) -> None:
         self._base = base_url.rstrip("/")
         self._session: aiohttp.ClientSession | None = None
+
+    def _candidate_bases(self) -> tuple[str, ...]:
+        """Return compatible addon base URLs for HAOS/container edge cases.
+
+        In some HAOS installs, `localhost:<port>` resolves to Home Assistant's
+        own container or an ingress-protected listener while the addon is
+        reachable by its Supervisor/Docker DNS name. Try the configured URL
+        first, then safe local alternatives on the same port.
+        """
+        bases = [self._base]
+        parsed = urlsplit(self._base)
+        host = (parsed.hostname or "").lower()
+        port = f":{parsed.port}" if parsed.port else ""
+        if host in ("localhost", "127.0.0.1", "::1"):
+            for alt_host in ("127.0.0.1", "localhost", "simson"):
+                netloc = f"{alt_host}{port}"
+                alt = urlunsplit((parsed.scheme or "http", netloc, parsed.path.rstrip("/"), "", ""))
+                if alt not in bases:
+                    bases.append(alt)
+        return tuple(bases)
 
     def _get_session(self) -> aiohttp.ClientSession:
         if self._session is None or self._session.closed:
@@ -31,15 +51,35 @@ class SimsonApiClient:
 
     async def _get(self, path: str) -> dict:
         session = self._get_session()
-        async with session.get(f"{self._base}{path}") as resp:
-            resp.raise_for_status()
-            return await resp.json()
+        last_err: Exception | None = None
+        for base in self._candidate_bases():
+            try:
+                async with session.get(f"{base}{path}") as resp:
+                    resp.raise_for_status()
+                    return await resp.json()
+            except (aiohttp.ClientResponseError, aiohttp.ClientConnectorError, TimeoutError) as err:
+                last_err = err
+                if isinstance(err, aiohttp.ClientResponseError) and err.status not in (403, 404):
+                    raise
+        if last_err:
+            raise last_err
+        raise RuntimeError("No Simson addon base URL configured")
 
     async def _post(self, path: str, data: dict | None = None) -> dict:
         session = self._get_session()
-        async with session.post(f"{self._base}{path}", json=data or {}) as resp:
-            resp.raise_for_status()
-            return await resp.json()
+        last_err: Exception | None = None
+        for base in self._candidate_bases():
+            try:
+                async with session.post(f"{base}{path}", json=data or {}) as resp:
+                    resp.raise_for_status()
+                    return await resp.json()
+            except (aiohttp.ClientResponseError, aiohttp.ClientConnectorError, TimeoutError) as err:
+                last_err = err
+                if isinstance(err, aiohttp.ClientResponseError) and err.status not in (403, 404):
+                    raise
+        if last_err:
+            raise last_err
+        raise RuntimeError("No Simson addon base URL configured")
 
     async def _post_first(self, paths: tuple[str, ...], data: dict | None = None) -> dict:
         """POST to the first route that exists.
@@ -48,26 +88,31 @@ class SimsonApiClient:
         updates where one side still exposes an older call endpoint name.
         Non-404 failures are real call failures and are surfaced immediately.
         """
-        last_not_found: aiohttp.ClientResponseError | None = None
+        last_compatible_error: aiohttp.ClientResponseError | None = None
         for path in paths:
             try:
                 return await self._post(path, data)
             except aiohttp.ClientResponseError as err:
-                if err.status != 404:
+                if err.status not in (403, 404):
                     raise
-                last_not_found = err
-                logger.warning("Simson addon endpoint %s not found; trying next compatible route", path)
-        if last_not_found:
+                last_compatible_error = err
+                logger.warning(
+                    "Simson addon endpoint %s returned HTTP %s; trying next compatible route",
+                    path,
+                    err.status,
+                )
+        if last_compatible_error:
             health = {}
             try:
                 health = await self.health()
             except Exception as health_err:
                 health = {"health_error": str(health_err)}
             raise RuntimeError(
-                "Simson addon does not expose a POST call API. "
+                "Simson addon did not accept a POST call API request. "
                 f"Tried {', '.join(paths)} on {self._base}. "
-                f"Addon health: {health}. Update/restart the Simson addon so it exposes /api/call."
-            ) from last_not_found
+                f"Addon health: {health}. Check the integration Addon URL; on HAOS it should point "
+                "to the Simson addon's local API port, not the ingress page."
+            ) from last_compatible_error
         raise RuntimeError("No Simson endpoint paths supplied")
 
     async def health(self) -> dict:
