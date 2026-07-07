@@ -21,16 +21,26 @@ class SimsonApiClient:
         """Return compatible addon base URLs for HAOS/container edge cases.
 
         In some HAOS installs, `localhost:<port>` resolves to Home Assistant's
-        own container or an ingress-protected listener while the addon is
-        reachable by its Supervisor/Docker DNS name. Try the configured URL
-        first, then safe local alternatives on the same port.
+        own container or an ingress-protected listener.  The Simson addon runs
+        with host networking, so HA Core usually reaches it through the HAOS
+        host/supervisor gateway address instead.  Try the configured URL first,
+        then local host-network addresses on the same port.  Do not guess a
+        Docker DNS name like "simson": on many HAOS installs that causes a DNS
+        timeout and masks the useful error.
         """
         bases = [self._base]
         parsed = urlsplit(self._base)
         host = (parsed.hostname or "").lower()
         port = f":{parsed.port}" if parsed.port else ""
         if host in ("localhost", "127.0.0.1", "::1"):
-            for alt_host in ("127.0.0.1", "localhost", "simson"):
+            for alt_host in (
+                "127.0.0.1",
+                "localhost",
+                "172.30.32.1",
+                "172.30.32.2",
+                "homeassistant.local",
+                "homeassistant",
+            ):
                 netloc = f"{alt_host}{port}"
                 alt = urlunsplit((parsed.scheme or "http", netloc, parsed.path.rstrip("/"), "", ""))
                 if alt not in bases:
@@ -40,7 +50,7 @@ class SimsonApiClient:
     def _get_session(self) -> aiohttp.ClientSession:
         if self._session is None or self._session.closed:
             self._session = aiohttp.ClientSession(
-                timeout=aiohttp.ClientTimeout(total=10),
+                timeout=aiohttp.ClientTimeout(total=4, connect=1.5, sock_connect=1.5),
             )
         return self._session
 
@@ -52,32 +62,48 @@ class SimsonApiClient:
     async def _get(self, path: str) -> dict:
         session = self._get_session()
         last_err: Exception | None = None
+        last_http_compat_err: aiohttp.ClientResponseError | None = None
         for base in self._candidate_bases():
             try:
                 async with session.get(f"{base}{path}") as resp:
                     resp.raise_for_status()
+                    if base != self._base:
+                        logger.info("Simson addon API reachable at %s; using it for this session", base)
+                        self._base = base.rstrip("/")
                     return await resp.json()
             except (aiohttp.ClientResponseError, aiohttp.ClientConnectorError, TimeoutError) as err:
                 last_err = err
-                if isinstance(err, aiohttp.ClientResponseError) and err.status not in (403, 404):
-                    raise
+                if isinstance(err, aiohttp.ClientResponseError):
+                    if err.status not in (403, 404):
+                        raise
+                    last_http_compat_err = err
         if last_err:
+            if last_http_compat_err:
+                raise last_http_compat_err
             raise last_err
         raise RuntimeError("No Simson addon base URL configured")
 
     async def _post(self, path: str, data: dict | None = None) -> dict:
         session = self._get_session()
         last_err: Exception | None = None
+        last_http_compat_err: aiohttp.ClientResponseError | None = None
         for base in self._candidate_bases():
             try:
                 async with session.post(f"{base}{path}", json=data or {}) as resp:
                     resp.raise_for_status()
+                    if base != self._base:
+                        logger.info("Simson addon API reachable at %s; using it for this session", base)
+                        self._base = base.rstrip("/")
                     return await resp.json()
             except (aiohttp.ClientResponseError, aiohttp.ClientConnectorError, TimeoutError) as err:
                 last_err = err
-                if isinstance(err, aiohttp.ClientResponseError) and err.status not in (403, 404):
-                    raise
+                if isinstance(err, aiohttp.ClientResponseError):
+                    if err.status not in (403, 404):
+                        raise
+                    last_http_compat_err = err
         if last_err:
+            if last_http_compat_err:
+                raise last_http_compat_err
             raise last_err
         raise RuntimeError("No Simson addon base URL configured")
 

@@ -49,7 +49,8 @@ _CARD_URL = f"{_CARD_JS_PATH}?v={_CARD_VERSION}"
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Simson from a config entry."""
-    client = SimsonApiClient(entry.data[CONF_ADDON_URL])
+    addon_url = entry.options.get(CONF_ADDON_URL, entry.data[CONF_ADDON_URL])
+    client = SimsonApiClient(addon_url)
 
     try:
         # Verify connectivity.
