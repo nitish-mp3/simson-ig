@@ -281,7 +281,7 @@ def _register_services(hass: HomeAssistant, client: SimsonApiClient) -> None:
             raise_service_error(f"call_phone_number {phone_number}", err)
 
     async def handle_answer_call(call: ServiceCall) -> None:
-        call_id = call.data["call_id"]
+        call_id = call.data.get("call_id", "")
         answered_by_user_id = call.data.get("answered_by_user_id", "")
         try:
             result = await client.answer_call(call_id, answered_by_user_id=answered_by_user_id)
@@ -291,7 +291,7 @@ def _register_services(hass: HomeAssistant, client: SimsonApiClient) -> None:
             raise_service_error("answer_call", err)
 
     async def handle_reject_call(call: ServiceCall) -> None:
-        call_id = call.data["call_id"]
+        call_id = call.data.get("call_id", "")
         reason = call.data.get("reason", "rejected")
         try:
             result = await client.reject_call(call_id, reason)
@@ -301,7 +301,7 @@ def _register_services(hass: HomeAssistant, client: SimsonApiClient) -> None:
             raise_service_error("reject_call", err)
 
     async def handle_hangup_call(call: ServiceCall) -> None:
-        call_id = call.data["call_id"]
+        call_id = call.data.get("call_id", "")
         try:
             result = await client.hangup_call(call_id)
             fire_service_result(SERVICE_HANGUP_CALL, result)
@@ -382,7 +382,7 @@ def _register_services(hass: HomeAssistant, client: SimsonApiClient) -> None:
             SERVICE_ANSWER_CALL,
             handle_answer_call,
             schema=vol.Schema({
-                vol.Required("call_id"): str,
+                vol.Optional("call_id", default=""): str,
                 vol.Optional("answered_by_user_id", default=""): str,
             }),
         )
@@ -393,7 +393,7 @@ def _register_services(hass: HomeAssistant, client: SimsonApiClient) -> None:
             SERVICE_REJECT_CALL,
             handle_reject_call,
             schema=vol.Schema({
-                vol.Required("call_id"): str,
+                vol.Optional("call_id", default=""): str,
                 vol.Optional("reason", default="rejected"): str,
             }),
         )
@@ -404,7 +404,7 @@ def _register_services(hass: HomeAssistant, client: SimsonApiClient) -> None:
             SERVICE_HANGUP_CALL,
             handle_hangup_call,
             schema=vol.Schema({
-                vol.Required("call_id"): str,
+                vol.Optional("call_id", default=""): str,
             }),
         )
 

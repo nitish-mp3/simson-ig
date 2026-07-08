@@ -190,8 +190,8 @@ answer_call:
   fields:
     call_id:
       name: Call ID
-      description: The ID of the call to answer.
-      required: true
+      description: The ID of the call to answer. Leave blank to answer the current incoming Simson call.
+      required: false
       example: "550e8400-e29b-41d4-a716-446655440000"
       selector:
         text:
@@ -209,8 +209,8 @@ reject_call:
   fields:
     call_id:
       name: Call ID
-      description: The ID of the call to reject.
-      required: true
+      description: The ID of the call to reject. Leave blank to reject the current incoming Simson call.
+      required: false
       example: "550e8400-e29b-41d4-a716-446655440000"
       selector:
         text:
@@ -228,8 +228,8 @@ hangup_call:
   fields:
     call_id:
       name: Call ID
-      description: The ID of the call to hang up.
-      required: true
+      description: The ID of the call to hang up. Leave blank to hang up the current active Simson call.
+      required: false
       example: "550e8400-e29b-41d4-a716-446655440000"
       selector:
         text:
