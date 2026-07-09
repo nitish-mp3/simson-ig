@@ -231,13 +231,19 @@ class SimsonApiClient:
         data = {"call_id": call_id}
         if answered_by_user_id:
             data["answered_by_user_id"] = answered_by_user_id
-        return await self._post("/api/answer", data)
+        return await self._post_first(("/api/answer", "/api/call/answer"), data)
 
     async def reject_call(self, call_id: str, reason: str = "rejected") -> dict:
-        return await self._post("/api/reject", {"call_id": call_id, "reason": reason})
+        return await self._post_first(
+            ("/api/reject", "/api/call/reject", "/api/call/decline"),
+            {"call_id": call_id, "reason": reason},
+        )
 
     async def hangup_call(self, call_id: str) -> dict:
-        return await self._post("/api/hangup", {"call_id": call_id, "explicit": True})
+        return await self._post_first(
+            ("/api/hangup", "/api/call/hangup", "/api/end", "/api/cancel"),
+            {"call_id": call_id, "explicit": True},
+        )
 
     async def transfer_call(self, call_id: str, target_node_id: str,
                             target_user_id: str = "",
