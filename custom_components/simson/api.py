@@ -227,22 +227,24 @@ class SimsonApiClient:
             data["caller_user_id"] = caller_user_id
         return await self._post_first(("/api/call", "/api/make-call", "/api/calls"), data)
 
-    async def answer_call(self, call_id: str, answered_by_user_id: str = "") -> dict:
-        data = {"call_id": call_id}
+    async def answer_call(self, call_id: str, answered_by_user_id: str = "",
+                          strict_call_id: bool = False) -> dict:
+        data = {"call_id": call_id, "strict_call_id": strict_call_id}
         if answered_by_user_id:
             data["answered_by_user_id"] = answered_by_user_id
         return await self._post_first(("/api/answer", "/api/call/answer"), data)
 
-    async def reject_call(self, call_id: str, reason: str = "rejected") -> dict:
+    async def reject_call(self, call_id: str, reason: str = "rejected",
+                          strict_call_id: bool = False) -> dict:
         return await self._post_first(
             ("/api/reject", "/api/call/reject", "/api/call/decline"),
-            {"call_id": call_id, "reason": reason},
+            {"call_id": call_id, "reason": reason, "strict_call_id": strict_call_id},
         )
 
-    async def hangup_call(self, call_id: str) -> dict:
+    async def hangup_call(self, call_id: str, strict_call_id: bool = False) -> dict:
         return await self._post_first(
             ("/api/hangup", "/api/call/hangup", "/api/end", "/api/cancel"),
-            {"call_id": call_id, "explicit": True},
+            {"call_id": call_id, "explicit": True, "strict_call_id": strict_call_id},
         )
 
     async def transfer_call(self, call_id: str, target_node_id: str,
