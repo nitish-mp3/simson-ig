@@ -228,17 +228,31 @@ class SimsonApiClient:
         return await self._post_first(("/api/call", "/api/make-call", "/api/calls"), data)
 
     async def answer_call(self, call_id: str, answered_by_user_id: str = "",
-                          strict_call_id: bool = False) -> dict:
-        data = {"call_id": call_id, "strict_call_id": strict_call_id}
+                          strict_call_id: bool = False,
+                          open_dashboard: bool = False,
+                          notify_ref: str = "") -> dict:
+        data = {
+            "call_id": call_id,
+            "strict_call_id": strict_call_id,
+            "open_dashboard": open_dashboard,
+        }
         if answered_by_user_id:
             data["answered_by_user_id"] = answered_by_user_id
+        if notify_ref:
+            data["notify_ref"] = notify_ref
         return await self._post_first(("/api/answer", "/api/call/answer"), data)
 
     async def reject_call(self, call_id: str, reason: str = "rejected",
-                          strict_call_id: bool = False) -> dict:
+                          strict_call_id: bool = False,
+                          terminate_call: bool = False) -> dict:
         return await self._post_first(
             ("/api/reject", "/api/call/reject", "/api/call/decline"),
-            {"call_id": call_id, "reason": reason, "strict_call_id": strict_call_id},
+            {
+                "call_id": call_id,
+                "reason": reason,
+                "strict_call_id": strict_call_id,
+                "terminate_call": terminate_call,
+            },
         )
 
     async def hangup_call(self, call_id: str, strict_call_id: bool = False) -> dict:

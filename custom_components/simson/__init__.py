@@ -17,6 +17,7 @@ from homeassistant.exceptions import ConfigEntryNotReady, HomeAssistantError
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.components.http import HomeAssistantView, StaticPathConfig
 from homeassistant.components.frontend import add_extra_js_url
+from homeassistant.components.lovelace.const import LOVELACE_DATA, MODE_STORAGE
 
 from aiohttp import web
 
@@ -45,7 +46,7 @@ logger = logging.getLogger(__name__)
 
 SCAN_INTERVAL = timedelta(seconds=5)
 _CARD_JS_PATH = "/simson/www/simson-card.js"
-_CARD_VERSION = "4.8.14"
+_CARD_VERSION = "4.8.15"
 _CARD_URL = f"{_CARD_JS_PATH}?v={_CARD_VERSION}"
 _CALL_ACTION_VIEW_HASS_IDS: set[int] = set()
 _CARD_REGISTERED_HASS_IDS: set[int] = set()
@@ -73,7 +74,37 @@ async def _async_register_card(hass: HomeAssistant) -> None:
     except Exception:
         pass  # Another Simson entry/reload may already own this static path.
     add_extra_js_url(hass, _CARD_URL)
+    await _async_register_lovelace_resource(hass)
     _CARD_REGISTERED_HASS_IDS.add(hass_id)
+
+
+async def _async_register_lovelace_resource(hass: HomeAssistant) -> None:
+    """Make fresh/mobile dashboard loads wait for the versioned card module."""
+    try:
+        lovelace = hass.data.get(LOVELACE_DATA)
+        if not lovelace or lovelace.resource_mode != MODE_STORAGE:
+            return
+        resources = lovelace.resources
+        await resources.async_get_info()  # Ensure the storage collection is loaded.
+        current = None
+        legacy = None
+        for item in resources.async_items() or []:
+            url = str(item.get("url") or "")
+            path = url.split("?", 1)[0]
+            if path == _CARD_JS_PATH:
+                current = item
+                break
+            if path == "/local/simson-call-card.js":
+                legacy = item
+
+        existing = current or legacy
+        if existing:
+            if existing.get("url") != _CARD_URL:
+                await resources.async_update_item(existing["id"], {"url": _CARD_URL})
+            return
+        await resources.async_create_item({"url": _CARD_URL, "res_type": "module"})
+    except Exception as err:  # Dynamic frontend module registration remains the fallback.
+        logger.warning("Could not persist the Simson Lovelace card resource: %s", err)
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -226,7 +257,10 @@ class SimsonCallActionView(HomeAssistantView):
                     result = await client.answer_call(call_id, strict_call_id=True)
                 elif action == "decline":
                     result = await client.reject_call(
-                        call_id, "declined_from_notification", strict_call_id=True
+                        call_id,
+                        "declined_from_notification",
+                        strict_call_id=True,
+                        terminate_call=True,
                     )
                 else:
                     result = await client.hangup_call(call_id, strict_call_id=True)
@@ -789,13 +823,21 @@ def _register_mobile_notification_actions(
         data = coordinator.data if coordinator and isinstance(coordinator.data, dict) else {}
         return str(data.get("node_id") or "").strip()
 
-    async def _run_action(action_name: str, call_id: str) -> None:
+    async def _run_action(action_name: str, call_id: str, notify_ref: str = "") -> None:
         try:
             if action_name == "answer":
-                result = await client.answer_call(call_id, strict_call_id=True)
+                result = await client.answer_call(
+                    call_id,
+                    strict_call_id=True,
+                    open_dashboard=bool(notify_ref),
+                    notify_ref=notify_ref,
+                )
             elif action_name == "decline":
                 result = await client.reject_call(
-                    call_id, "declined_from_notification", strict_call_id=True
+                    call_id,
+                    "declined_from_notification",
+                    strict_call_id=True,
+                    terminate_call=True,
                 )
             elif action_name == "hangup":
                 result = await client.hangup_call(call_id, strict_call_id=True)
@@ -836,17 +878,20 @@ def _register_mobile_notification_actions(
             "SIMSON_DECLINE": "decline",
             "SIMSON_HANGUP": "hangup",
         }
-        parts = action.split("::", 2)
-        if len(parts) == 3 and parts[0] in scoped_prefixes:
+        parts = action.split("::", 3)
+        if len(parts) in (3, 4) and parts[0] in scoped_prefixes:
             action_node_id = unquote(parts[1]).strip()
             call_id = unquote(parts[2]).strip()
+            notify_ref = unquote(parts[3]).strip() if len(parts) == 4 else ""
             # Every config entry has its own event listener. Scope the action
             # to the originating node so one button cannot answer/hang up a
             # different site's call.
             if action_node_id and action_node_id != _entry_node_id():
                 return
             if call_id:
-                hass.async_create_task(_run_action(scoped_prefixes[parts[0]], call_id))
+                hass.async_create_task(
+                    _run_action(scoped_prefixes[parts[0]], call_id, notify_ref)
+                )
             return
 
         # Compatibility for notifications created by older addon versions.
