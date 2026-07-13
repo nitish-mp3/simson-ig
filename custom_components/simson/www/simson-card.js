@@ -1,7 +1,8 @@
 /**
- * Simson Call Relay — Lovelace Card v4.8.13
+ * Simson Call Relay — Lovelace Card v4.8.14
  *
  * Full WebRTC voice calling between HA instances + Asterisk SIP phone support.
+ * v4.8.14: Register independently of addon startup and refresh mobile caches.
  * v4.8.13: Add explicit route selector and fix numeric SIP extensions being
  *           misdetected as HAOS nodes in the smart composer.
  * v4.8.12: Rebuild idle dashboard into one smart composer with compact route
@@ -69,7 +70,7 @@
  *     - node_id: office2
  */
 
-const VERSION = "4.8.13";
+const VERSION = "4.8.14";
 
 // Default ICE servers (fallback when /api/webrtc-config is unavailable).
 const ICE_SERVERS = [

@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from datetime import timedelta
 from pathlib import Path
+from urllib.parse import unquote
 
 import aiohttp
 import voluptuous as vol
@@ -44,13 +45,43 @@ logger = logging.getLogger(__name__)
 
 SCAN_INTERVAL = timedelta(seconds=5)
 _CARD_JS_PATH = "/simson/www/simson-card.js"
-_CARD_VERSION = "4.8.13"
+_CARD_VERSION = "4.8.14"
 _CARD_URL = f"{_CARD_JS_PATH}?v={_CARD_VERSION}"
 _CALL_ACTION_VIEW_HASS_IDS: set[int] = set()
+_CARD_REGISTERED_HASS_IDS: set[int] = set()
+
+
+async def async_setup(hass: HomeAssistant, config: dict) -> bool:
+    """Register the card independently of addon/config-entry availability."""
+    await _async_register_card(hass)
+    return True
+
+
+async def _async_register_card(hass: HomeAssistant) -> None:
+    """Serve and load the card once, even while the addon is reconnecting."""
+    hass_id = id(hass)
+    if hass_id in _CARD_REGISTERED_HASS_IDS:
+        return
+    try:
+        await hass.http.async_register_static_paths([
+            StaticPathConfig(
+                "/simson/www",
+                str(Path(__file__).parent / "www"),
+                cache_headers=False,
+            )
+        ])
+    except Exception:
+        pass  # Another Simson entry/reload may already own this static path.
+    add_extra_js_url(hass, _CARD_URL)
+    _CARD_REGISTERED_HASS_IDS.add(hass_id)
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Simson from a config entry."""
+    # Card rendering must not depend on addon health. This runs before the
+    # connectivity check so mobile/hard-refresh does not show Configuration
+    # error while the addon or DNS is briefly reconnecting.
+    await _async_register_card(hass)
     addon_url = entry.options.get(CONF_ADDON_URL, entry.data[CONF_ADDON_URL])
     client = SimsonApiClient(addon_url)
 
@@ -60,21 +91,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             await client.health()
         except Exception as err:
             raise ConfigEntryNotReady(f"Cannot connect to Simson addon: {err}") from err
-
-        # Serve the Lovelace card JS via a static path.
-        try:
-            await hass.http.async_register_static_paths([
-                StaticPathConfig(
-                    "/simson/www",
-                    str(Path(__file__).parent / "www"),
-                    cache_headers=False,
-                )
-            ])
-        except Exception:
-            pass  # Path already registered on reload — safe to ignore
-
-        # Auto-load card JS on every HA frontend page — no manual resource setup.
-        add_extra_js_url(hass, _CARD_URL)
 
         coordinator = SimsonCoordinator(hass, client)
         await coordinator.async_config_entry_first_refresh()
@@ -767,14 +783,22 @@ def _register_mobile_notification_actions(
 ) -> None:
     """Handle HA Companion actionable notification buttons for Simson calls."""
 
+    coordinator = hass.data.get(DOMAIN, {}).get(entry.entry_id, {}).get("coordinator")
+
+    def _entry_node_id() -> str:
+        data = coordinator.data if coordinator and isinstance(coordinator.data, dict) else {}
+        return str(data.get("node_id") or "").strip()
+
     async def _run_action(action_name: str, call_id: str) -> None:
         try:
             if action_name == "answer":
-                result = await client.answer_call(call_id)
+                result = await client.answer_call(call_id, strict_call_id=True)
             elif action_name == "decline":
-                result = await client.reject_call(call_id, "declined_from_notification")
+                result = await client.reject_call(
+                    call_id, "declined_from_notification", strict_call_id=True
+                )
             elif action_name == "hangup":
-                result = await client.hangup_call(call_id)
+                result = await client.hangup_call(call_id, strict_call_id=True)
             else:
                 return
 
@@ -807,6 +831,25 @@ def _register_mobile_notification_actions(
     @callback
     def _handle_action_event(event: Event) -> None:
         action = str(event.data.get("action") or "").strip()
+        scoped_prefixes = {
+            "SIMSON_ANSWER": "answer",
+            "SIMSON_DECLINE": "decline",
+            "SIMSON_HANGUP": "hangup",
+        }
+        parts = action.split("::", 2)
+        if len(parts) == 3 and parts[0] in scoped_prefixes:
+            action_node_id = unquote(parts[1]).strip()
+            call_id = unquote(parts[2]).strip()
+            # Every config entry has its own event listener. Scope the action
+            # to the originating node so one button cannot answer/hang up a
+            # different site's call.
+            if action_node_id and action_node_id != _entry_node_id():
+                return
+            if call_id:
+                hass.async_create_task(_run_action(scoped_prefixes[parts[0]], call_id))
+            return
+
+        # Compatibility for notifications created by older addon versions.
         prefixes = {
             "SIMSON_ANSWER_": "answer",
             "SIMSON_DECLINE_": "decline",
