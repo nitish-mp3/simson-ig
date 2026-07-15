@@ -137,10 +137,17 @@ class SimsonCallStateSensor(SimsonBaseSensor):
                 "remote_node_id": active.get("remote_node_id", ""),
                 "remote_label": active.get("remote_label", ""),
                 "remote_number": active.get("remote_number", ""),
+                "remote_name": active.get("remote_name", ""),
+                "display_name": active.get("display_name", ""),
+                "caller_number": active.get("caller_number", ""),
+                "caller_name": active.get("caller_name", ""),
+                "callee_number": active.get("callee_number", ""),
+                "callee_name": active.get("callee_name", ""),
                 "source_extension": active.get("source_extension", ""),
                 "extension": active.get("extension", ""),
                 "context": active.get("context", ""),
                 "trunk": active.get("trunk", ""),
+                "gateway_extension": active.get("gateway_extension", ""),
                 "call_type": active.get("call_type", ""),
                 "sip_bridge_id": active.get("sip_bridge_id", ""),
                 "target_extension": active.get("target_extension", ""),
@@ -151,7 +158,10 @@ class SimsonCallStateSensor(SimsonBaseSensor):
                 "target_label": active.get("target_label", ""),
                 "started_at": active.get("started_at", ""),
                 "answered_at": active.get("answered_at", ""),
+                "ended_at": active.get("ended_at", ""),
                 "active_for": active.get("active_for", 0),
+                "duration_seconds": active.get("duration_seconds", 0),
+                "ring_duration_seconds": active.get("ring_duration_seconds", 0),
                 "target_user_id": active.get("target_user_id", ""),
                 "target_user_name": active.get("target_user_name", ""),
                 "caller_user_id": active.get("caller_user_id", ""),
@@ -221,9 +231,9 @@ class SimsonLastCallEventSensor(SimsonBaseSensor):
     @property
     def native_value(self):
         if not self.coordinator.data:
-            return "unknown"
+            return "none"
         event = self.coordinator.data.get("last_call_event") or {}
-        return event.get("event") or event.get("status") or "unknown"
+        return event.get("event") or event.get("status") or "none"
 
     @property
     def extra_state_attributes(self):
@@ -242,6 +252,13 @@ class SimsonLastCallEventSensor(SimsonBaseSensor):
             "remote": event.get("remote", ""),
             "remote_node_id": event.get("remote_node_id", ""),
             "remote_label": event.get("remote_label", ""),
+            "remote_number": event.get("remote_number", ""),
+            "remote_name": event.get("remote_name", ""),
+            "display_name": event.get("display_name", ""),
+            "caller_number": event.get("caller_number", ""),
+            "caller_name": event.get("caller_name", ""),
+            "callee_number": event.get("callee_number", ""),
+            "callee_name": event.get("callee_name", ""),
             "call_type": event.get("call_type", ""),
             "sip_bridge_id": event.get("sip_bridge_id", ""),
             "sip_extension": event.get("sip_extension", ""),
@@ -263,9 +280,12 @@ class SimsonLastCallEventSensor(SimsonBaseSensor):
             "started_at": event.get("started_at", ""),
             "answered_at": event.get("answered_at", ""),
             "ended_at": event.get("ended_at", ""),
+            "duration_seconds": event.get("duration_seconds", 0),
+            "ring_duration_seconds": event.get("ring_duration_seconds", 0),
             "extension": event.get("extension", ""),
             "context": event.get("context", ""),
             "trunk": event.get("trunk", ""),
+            "gateway_extension": event.get("gateway_extension", ""),
             "raw": event,
         }
 

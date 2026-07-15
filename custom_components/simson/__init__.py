@@ -46,7 +46,7 @@ logger = logging.getLogger(__name__)
 
 SCAN_INTERVAL = timedelta(seconds=5)
 _CARD_JS_PATH = "/simson/www/simson-card.js"
-_CARD_VERSION = "4.8.15"
+_CARD_VERSION = "4.8.16"
 _CARD_URL = f"{_CARD_JS_PATH}?v={_CARD_VERSION}"
 _CALL_ACTION_VIEW_HASS_IDS: set[int] = set()
 _CARD_REGISTERED_HASS_IDS: set[int] = set()
@@ -192,7 +192,16 @@ class SimsonCoordinator(DataUpdateCoordinator):
         try:
             status = await self.client.status()
             calls = await self.client.calls()
-            return {**status, "calls_data": calls}
+            fresh = {**status, "calls_data": calls}
+            # Event listeners enrich these values immediately between polls.
+            # Preserve them when /api/status does not include event history;
+            # otherwise every five-second refresh resets automation sensors to
+            # unknown and drops caller/duration metadata.
+            previous = self.data if isinstance(self.data, dict) else {}
+            for key in ("last_call_event", "last_automation_event"):
+                if key not in fresh and previous.get(key):
+                    fresh[key] = previous[key]
+            return fresh
         except Exception as err:
             raise UpdateFailed(f"Error fetching Simson status: {err}") from err
 
@@ -738,13 +747,23 @@ def _register_live_event_sync(
         event = str(payload.get("event") or payload.get("status") or "").strip()
         if event in ("incoming", "ringing"):
             return "incoming"
-        if event in ("outgoing", "requesting", "forwarded"):
+        if event in ("outgoing", "requesting"):
             return "ringing"
         if event in ("active", "answered"):
             return "active"
         if event in ("ended", "failed", "missed", "declined", "timeout"):
             return event
         return event or "unknown"
+
+    def merge_nonempty(base: dict, update: dict) -> dict:
+        """Merge sparse status events without erasing richer call metadata."""
+        merged = dict(base or {})
+        for key, value in (update or {}).items():
+            if value is not None and value != "":
+                merged[key] = value
+            elif key not in merged:
+                merged[key] = value
+        return merged
 
     @callback
     def update_call_event(event: Event) -> None:
@@ -753,11 +772,21 @@ def _register_live_event_sync(
             return
 
         current = dict(coordinator.data or {})
-        current["last_call_event"] = payload
         calls_data = dict(current.get("calls_data") or {})
         event_state = state_for_event(payload)
         call_id = str(payload.get("call_id") or "")
-        terminal = event_state in {"ended", "failed", "missed", "declined", "timeout"}
+        terminal = event_state in {"ended", "failed", "missed", "declined", "timeout", "forwarded"}
+
+        previous_event = current.get("last_call_event") or {}
+        if isinstance(previous_event, dict) and (
+            not call_id or str(previous_event.get("call_id") or "") == call_id
+        ):
+            rich_event = merge_nonempty(previous_event, payload)
+        else:
+            rich_event = dict(payload)
+        rich_event["event"] = event_state
+        rich_event["status"] = event_state
+        current["last_call_event"] = rich_event
 
         active_call = calls_data.get("active_call") or current.get("active_call")
         if terminal:
@@ -765,24 +794,34 @@ def _register_live_event_sync(
                 calls_data["active_call"] = None
                 current["active_call"] = None
         else:
-            merged = dict(active_call or {})
-            merged.update({
-                "call_id": call_id or merged.get("call_id", ""),
+            existing_active = dict(active_call or {})
+            merged = merge_nonempty(active_call or {}, {
+                "call_id": call_id or existing_active.get("call_id", ""),
                 "state": event_state,
-                "direction": payload.get("direction", merged.get("direction", "")),
-                "remote_node_id": payload.get("remote_node_id", merged.get("remote_node_id", "")),
-                "remote_label": payload.get("remote_label") or payload.get("remote_number") or merged.get("remote_label", ""),
-                "call_type": payload.get("call_type", merged.get("call_type", "")),
-                "sip_bridge_id": payload.get("sip_bridge_id", merged.get("sip_bridge_id", "")),
-                "target_id": payload.get("target_id", merged.get("target_id", "")),
-                "target_type": payload.get("target_type", merged.get("target_type", "")),
-                "target_label": payload.get("target_label", merged.get("target_label", "")),
-                "source_extension": payload.get("source_extension", merged.get("source_extension", "")),
-                "target_extension": payload.get("target_extension", merged.get("target_extension", "")),
-                "source_auto_mode": payload.get("source_auto_mode", merged.get("source_auto_mode", "")),
-                "target_auto_mode": payload.get("target_auto_mode", merged.get("target_auto_mode", "")),
-                "started_at": payload.get("started_at", merged.get("started_at", "")),
-                "answered_at": payload.get("answered_at", merged.get("answered_at", "")),
+                "direction": payload.get("direction", ""),
+                "remote_node_id": payload.get("remote_node_id", ""),
+                "remote_label": payload.get("remote_label") or payload.get("remote_name") or payload.get("remote_number"),
+                "remote_number": payload.get("remote_number", ""),
+                "remote_name": payload.get("remote_name", ""),
+                "display_name": payload.get("display_name", ""),
+                "caller_number": payload.get("caller_number", ""),
+                "caller_name": payload.get("caller_name", ""),
+                "callee_number": payload.get("callee_number", ""),
+                "callee_name": payload.get("callee_name", ""),
+                "call_type": payload.get("call_type", ""),
+                "sip_bridge_id": payload.get("sip_bridge_id", ""),
+                "target_id": payload.get("target_id", ""),
+                "target_type": payload.get("target_type", ""),
+                "target_label": payload.get("target_label", ""),
+                "source_extension": payload.get("source_extension", ""),
+                "target_extension": payload.get("target_extension", ""),
+                "gateway_extension": payload.get("gateway_extension", ""),
+                "source_auto_mode": payload.get("source_auto_mode", ""),
+                "target_auto_mode": payload.get("target_auto_mode", ""),
+                "started_at": payload.get("started_at", ""),
+                "answered_at": payload.get("answered_at", ""),
+                "duration_seconds": payload.get("duration_seconds", 0),
+                "ring_duration_seconds": payload.get("ring_duration_seconds", 0),
             })
             calls_data["active_call"] = merged
             current["active_call"] = merged

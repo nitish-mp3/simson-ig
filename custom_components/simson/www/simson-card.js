@@ -1,7 +1,9 @@
 /**
- * Simson Call Relay — Lovelace Card v4.8.15
+ * Simson Call Relay — Lovelace Card v4.8.16
  *
  * Full WebRTC voice calling between HA instances + Asterisk SIP phone support.
+ * v4.8.16: Keep locally placed calls outgoing across event races and present
+ * normalized caller/callee identity without transient answer controls.
  * v4.8.15: Persist a versioned Lovelace resource to eliminate mobile load races.
  * v4.8.14: Register independently of addon startup and refresh mobile caches.
  * v4.8.13: Add explicit route selector and fix numeric SIP extensions being
@@ -71,7 +73,7 @@
  *     - node_id: office2
  */
 
-const VERSION = "4.8.15";
+const VERSION = "4.8.16";
 
 // Default ICE servers (fallback when /api/webrtc-config is unavailable).
 const ICE_SERVERS = [
@@ -2155,6 +2157,7 @@ class SimsonCard extends HTMLElement {
     this._pendingCandidates = [];
     this._answeredByMe = false;   // track if this user answered the call
     this._answerPendingCallId = null;
+    this._outgoingIntentAt = 0;
     this._incomingCallTimeout = null;  // timeout to clear phantom incoming calls
     this._lastIncomingCall = null;     // "from_node_id|call_type" for deduplication
     this._lastIncomingCallTime = 0;    // timestamp of last incoming call
@@ -2350,7 +2353,17 @@ class SimsonCard extends HTMLElement {
       (direction === "incoming" && (!target_user_id || target_user_id === myUserId)) ||
       (direction === "outgoing" && (!caller_user_id || caller_user_id === myUserId));
     if (!isMyEvent) return;
-    if (status === "active") {
+    if ((status === "requesting" || status === "ringing") && direction === "outgoing") {
+      this._currentCallId = call_id || this._currentCallId;
+      this._currentRemoteNode = remote_node_id || this._currentRemoteNode;
+      this._isCaller = true;
+      this._polite = false;
+      this._outgoingIntentAt = Date.now();
+      this._stopRingtone();
+      this._removePopup();
+      this._dismissBrowserNotification();
+      this._render();
+    } else if (status === "active") {
       console.log("[Simson] call_status active", { call_id, call_type, sip_bridge_id, direction, remote_node_id });
       const answeredLocally = this._answeredByMe || this._answerPendingCallId === call_id;
       if (direction === "incoming" && !answeredLocally) {
@@ -2388,7 +2401,8 @@ class SimsonCard extends HTMLElement {
         String(remote_node_id || "").startsWith("sip:") ||
         String(remote_node_id || "").startsWith("asterisk:");
       // Caller creates the offer (impolite), callee waits for offer (polite).
-      this._isCaller = direction === "outgoing";
+      this._isCaller = direction === "outgoing" || this._isCaller;
+      this._outgoingIntentAt = 0;
       this._polite = !this._isCaller;
       if (!this._callStart) this._callStart = Date.now();
       this._stopRingtone();
@@ -2420,6 +2434,7 @@ class SimsonCard extends HTMLElement {
       this._isCaller = false;
       this._answeredByMe = false;
       this._answerPendingCallId = null;
+      this._outgoingIntentAt = 0;
       // Refresh history after call ends.
       setTimeout(() => this._loadHistory(), 2000);
       this._render();
@@ -2430,6 +2445,13 @@ class SimsonCard extends HTMLElement {
     const { call_id, from_node_id, from_label, call_type, target_user_id, metadata } = event;
     if (target_user_id && this._hass?.user?.id && target_user_id !== this._hass.user.id) {
       this._ignoredCallId = call_id;
+      return;
+    }
+    // Central SIP may emit a media-leg invite immediately after this card
+    // places a call. It belongs to the outgoing call and must not expose
+    // Answer/Decline controls as though a second call arrived.
+    if (this._isCaller && this._outgoingIntentAt && Date.now() - this._outgoingIntentAt < 15000) {
+      console.log("[Simson] Ignoring outgoing bridge invite in incoming UI", { call_id, from_node_id });
       return;
     }
     // Suppress rapid-fire re-invites after the user hit Decline.
@@ -2561,8 +2583,29 @@ class SimsonCard extends HTMLElement {
 
   async _callService(service, data = {}) {
     if (!this._hass) return;
-    await this._hass.callService("simson", service, data);
-    setTimeout(() => this._render(), 600);
+    try {
+      await this._hass.callService("simson", service, data);
+      setTimeout(() => this._render(), 250);
+    } catch (err) {
+      if (service === "make_call" || service === "call_sip_phone" || service === "call_phone_number") {
+        this._clearLocalCallState();
+      }
+      throw err;
+    }
+  }
+
+  _beginOutgoingCall(remoteNode) {
+    this._currentRemoteNode = remoteNode || this._currentRemoteNode;
+    this._callStart = null;
+    this._isCaller = true;
+    this._polite = false;
+    this._answeredByMe = false;
+    this._answerPendingCallId = null;
+    this._outgoingIntentAt = Date.now();
+    this._stopRingtone();
+    this._removePopup();
+    this._dismissBrowserNotification();
+    this._render();
   }
 
   async _runAction(key, fn, minMs = 650) {
@@ -2594,21 +2637,19 @@ class SimsonCard extends HTMLElement {
 
   _dial(nodeId, targetUserId, targetUserName) {
     if (!nodeId) return;
-    this._currentRemoteNode = nodeId;
-    this._callStart = null;
+    this._beginOutgoingCall(nodeId);
     const data = { target_node_id: nodeId, call_type: "voice", caller_user_id: this._hass?.user?.id || "" };
     if (targetUserId) {
       data.target_user_id = targetUserId;
       data.target_user_name = targetUserName || "";
     }
-    this._callService("make_call", data);
+    return this._callService("make_call", data);
   }
 
   _dialTarget(targetId, targetType, nodeId) {
-    this._currentRemoteNode = nodeId || targetId;
-    this._callStart = null;
+    this._beginOutgoingCall(nodeId || targetId);
     const sipTypes = ["asterisk", "sip", "gateway"];
-    this._callService("make_call", {
+    return this._callService("make_call", {
       target_id: targetId,
       call_type: sipTypes.includes(targetType) ? "sip" : "voice",
       caller_user_id: this._hass?.user?.id || "",
@@ -2622,9 +2663,8 @@ class SimsonCard extends HTMLElement {
       this._dialPSTNNumber(extension, trunk);
       return;
     }
-    this._currentRemoteNode = extension;
-    this._callStart = null;
-    this._callService("make_call", {
+    this._beginOutgoingCall(extension);
+    return this._callService("make_call", {
       target_id: `asterisk_${extension}`,
       call_type: "sip",
       caller_user_id: this._hass?.user?.id || "",
@@ -2636,9 +2676,8 @@ class SimsonCard extends HTMLElement {
     const digits = cleaned.replace(/^\+/, "");
     if (!digits) return;
     const effectiveTrunk = String(trunk || this._effectivePstnTrunk()).trim();
-    this._currentRemoteNode = `phone:${cleaned}`;
-    this._callStart = null;
-    this._callService("make_call", {
+    this._beginOutgoingCall(`phone:${cleaned}`);
+    return this._callService("make_call", {
       phone_number: cleaned,
       trunk: effectiveTrunk,
       call_type: "sip",
@@ -2660,6 +2699,7 @@ class SimsonCard extends HTMLElement {
     this._isCaller = false;
     this._answeredByMe = false;
     this._answerPendingCallId = null;
+    this._outgoingIntentAt = 0;
     this._prevCallState = "idle";
     this._render();
   }
@@ -2713,6 +2753,7 @@ class SimsonCard extends HTMLElement {
     this._callStart = null;
     this._answeredByMe = false;
     this._answerPendingCallId = null;
+    this._outgoingIntentAt = 0;
     this._prevCallState = "idle"; // reset transition tracking
     // Suppress any new incoming call popup for 8 s so the phone spam
     // doesn't immediately re-open the popup after the user dismisses it.
@@ -3581,7 +3622,10 @@ class SimsonCard extends HTMLElement {
     const connected = this._isConnected();
     const callState = this._callState();
     const callId = this._activeCallAttr("call_id", "") || this._currentCallId || "";
-    const direction = this._activeCallAttr("direction", "");
+    const entityDirection = this._activeCallAttr("direction", "");
+    const outgoingIntentActive = this._isCaller && this._outgoingIntentAt &&
+      (Date.now() - this._outgoingIntentAt < 15000);
+    const direction = outgoingIntentActive ? "outgoing" : entityDirection;
 
     // Per-user call ownership: only show call UI to the intended caller or target.
     // Use `direction` (from entity attr — stable across all call states) not `callState`.
@@ -3599,7 +3643,7 @@ class SimsonCard extends HTMLElement {
     const effectiveCallState = isMyCall ? callState : "idle";
 
     const isIdle = effectiveCallState === "idle" || effectiveCallState === "unknown";
-    const isIncoming = effectiveCallState === "incoming";
+    const isIncoming = effectiveCallState === "incoming" && direction !== "outgoing" && !this._isCaller;
     const isRinging = effectiveCallState === "requesting" || effectiveCallState === "ringing";
     const isActive = effectiveCallState === "active";
     const isMissed = effectiveCallState === "missed";
@@ -3610,9 +3654,12 @@ class SimsonCard extends HTMLElement {
     const activeCallType = this._activeCallAttr("call_type", "");
     const activeSipBridgeId = this._activeCallAttr("sip_bridge_id", "");
 
-    const remoteLabel = this._activeCallAttr("remote_label") ||
+    const remoteLabel = this._activeCallAttr("remote_name") ||
+                        this._activeCallAttr("display_name") ||
+                        this._activeCallAttr("remote_label") ||
+                        this._activeCallAttr("remote_number") ||
                         this._activeCallAttr("remote_node_id") ||
-                        this._currentRemoteNode || "Unknown";
+                        this._currentRemoteNode || (direction === "incoming" ? "Caller" : "Destination");
 
     if (callId && !this._currentCallId && isMyCall) this._currentCallId = callId;
     if (hasCall && !this._currentRemoteNode) {
@@ -3647,7 +3694,8 @@ class SimsonCard extends HTMLElement {
         this._currentCallId = callId;
         this._currentRemoteNode = this._activeCallAttr("remote_node_id", "");
         if (activeSipBridgeId) this._sipBridgeId = activeSipBridgeId;
-        this._isCaller = direction === "outgoing";
+        this._isCaller = direction === "outgoing" || this._isCaller;
+        this._outgoingIntentAt = 0;
         this._polite = !this._isCaller;
         if (!this._callStart) {
           const startedAt = Number(this._activeCallAttr("started_at", 0));
@@ -3670,6 +3718,7 @@ class SimsonCard extends HTMLElement {
         this._cleanupWebRTC();
         this._callStart = null; this._currentCallId = null;
         this._currentRemoteNode = null; this._ignoredCallId = null;
+        this._isCaller = false; this._outgoingIntentAt = 0;
         setTimeout(() => this._loadHistory(), 2000);
       }
     }
