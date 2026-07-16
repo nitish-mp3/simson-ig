@@ -868,8 +868,13 @@ def _register_mobile_notification_actions(
                 result = await client.answer_call(
                     call_id,
                     strict_call_id=True,
-                    open_dashboard=bool(notify_ref),
-                    notify_ref=notify_ref,
+                    # Current notifications use the authenticated HTTP action
+                    # view, which answers and redirects in one foregrounded
+                    # request. Keep old custom-action notifications working,
+                    # but never issue command_webview in the background: Android
+                    # gates that command behind device permissions and can show
+                    # an unrelated command_bluetooth permission warning.
+                    open_dashboard=False,
                 )
             elif action_name == "decline":
                 result = await client.reject_call(
