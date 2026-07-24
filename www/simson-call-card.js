@@ -1,5 +1,5 @@
 /**
- * Simson Call Relay — Lovelace Card v4.8.16
+ * Simson Call Relay — Lovelace Card v4.8.17
  *
  * Full WebRTC voice calling between HA instances + Asterisk SIP phone support.
  * v4.8.16: Keep locally placed calls outgoing across event races and present
@@ -73,7 +73,7 @@
  *     - node_id: office2
  */
 
-const VERSION = "4.8.16";
+const VERSION = "4.8.17";
 
 // Default ICE servers (fallback when /api/webrtc-config is unavailable).
 const ICE_SERVERS = [
@@ -3770,9 +3770,12 @@ class SimsonCard extends HTMLElement {
       <div class="live-board">
         <div class="live-board-title">Live on this site</div>
         ${activeCalls.slice(0, 3).map(c => {
-          const who = c.answered_by_user_name || c.answered_by_user_id ||
-            c.target_user_name || c.target_user_id || c.caller_user_id || "site";
-          const route = c.forwarded_extension || c.forwarded_to || c.remote_label || c.remote_node_id || c.call_id;
+          const who = c.answered_by_user_name || c.target_user_name || c.caller_user_name ||
+            c.caller_name || c.display_name || c.source_extension || c.caller_number ||
+            c.answered_by_user_id || c.target_user_id || c.caller_user_id || "site";
+          const route = c.forwarded_extension || c.forwarded_to || c.target_label ||
+            c.callee_name || c.target_extension || c.callee_number || c.remote_label ||
+            c.remote_number || c.remote_node_id || "active call";
           const elapsed = this._formatDuration(Number(c.active_for || 0));
           return `<div class="live-board-row">
             <span>${this._esc(who)}</span>

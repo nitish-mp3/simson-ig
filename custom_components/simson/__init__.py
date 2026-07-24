@@ -46,7 +46,7 @@ logger = logging.getLogger(__name__)
 
 SCAN_INTERVAL = timedelta(seconds=5)
 _CARD_JS_PATH = "/simson/www/simson-card.js"
-_CARD_VERSION = "4.8.16"
+_CARD_VERSION = "4.8.17"
 _CARD_URL = f"{_CARD_JS_PATH}?v={_CARD_VERSION}"
 _CALL_ACTION_VIEW_HASS_IDS: set[int] = set()
 _CARD_REGISTERED_HASS_IDS: set[int] = set()
