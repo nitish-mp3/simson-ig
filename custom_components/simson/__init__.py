@@ -416,12 +416,14 @@ def _register_services(hass: HomeAssistant, client: SimsonApiClient) -> None:
         trunk = str(call.data.get("trunk", "") or "").strip()
         caller_id = call.data.get("caller_id", "")
         caller_user_id = call.data.get("caller_user_id", "")
+        max_duration_sec = call.data.get("max_duration_sec", 120)
         try:
             result = await client.call_phone_number(
                 phone_number=phone_number,
                 trunk=trunk,
                 caller_id=caller_id,
                 caller_user_id=caller_user_id,
+                max_duration_sec=max_duration_sec,
             )
             logger.info("Outside phone call initiated: %s", result)
             fire_service_result(SERVICE_CALL_PHONE_NUMBER, result)
@@ -522,6 +524,7 @@ def _register_services(hass: HomeAssistant, client: SimsonApiClient) -> None:
                 vol.Optional("trunk", default=""): str,
                 vol.Optional("caller_id", default=""): str,
                 vol.Optional("caller_user_id", default=""): str,
+                vol.Optional("max_duration_sec", default=120): vol.All(int, vol.Range(min=15, max=3600)),
             }),
         )
 

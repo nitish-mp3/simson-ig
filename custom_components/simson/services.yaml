@@ -152,7 +152,6 @@ call_sip_phone:
       required: false
       selector:
         text:
-
 call_phone_number:
   name: Call Outside Phone Number
   description: Dial a mobile/landline/PSTN number through the selected or default gateway trunk.
@@ -183,6 +182,17 @@ call_phone_number:
       required: false
       selector:
         text:
+    max_duration_sec:
+      name: Maximum Connected Duration
+      description: Safety limit for this automation-originated outside call. It is ended automatically to release a stuck gateway line.
+      required: false
+      default: 120
+      selector:
+        number:
+          min: 15
+          max: 3600
+          unit_of_measurement: seconds
+          mode: box
 
 answer_call:
   name: Answer Call

@@ -216,9 +216,14 @@ class SimsonApiClient:
 
     async def call_phone_number(self, phone_number: str, trunk: str = "",
                                 caller_id: str = "",
-                                caller_user_id: str = "") -> dict:
+                                caller_user_id: str = "",
+                                max_duration_sec: int = 120) -> dict:
         """Call an outside/PSTN number through the selected or default gateway."""
-        data = {"phone_number": str(phone_number or "").strip(), "call_type": "sip"}
+        data = {
+            "phone_number": str(phone_number or "").strip(),
+            "call_type": "sip",
+            "max_duration_sec": max_duration_sec,
+        }
         if trunk:
             data["trunk"] = trunk
         if caller_id:
