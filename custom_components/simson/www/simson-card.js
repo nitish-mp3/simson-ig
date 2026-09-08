@@ -1,5 +1,5 @@
 /**
- * Simson Call Relay — Lovelace Card v4.8.17
+ * Simson Call Relay — Lovelace Card v4.8.18
  *
  * Full WebRTC voice calling between HA instances + Asterisk SIP phone support.
  * v4.8.16: Keep locally placed calls outgoing across event races and present
@@ -73,7 +73,7 @@
  *     - node_id: office2
  */
 
-const VERSION = "4.8.17";
+const VERSION = "4.8.18";
 
 // Default ICE servers (fallback when /api/webrtc-config is unavailable).
 const ICE_SERVERS = [
@@ -1596,6 +1596,55 @@ const STYLES = `
     }
     .tabs {
       max-width: none;
+    }
+  }
+
+  /* v4.8.18 mobile and accessibility refinement. */
+  .card button:focus-visible,
+  .card input:focus-visible,
+  .card select:focus-visible {
+    outline: 2px solid #8ff0d3;
+    outline-offset: 2px;
+  }
+
+  @media (pointer: coarse) {
+    .tab,
+    .btn,
+    .btn-target,
+    .smart-chip,
+    .sip-device,
+    .user-item,
+    .transfer-user,
+    .history-callback,
+    .btn-refresh {
+      min-height: 44px;
+    }
+  }
+
+  @media (max-width: 420px) {
+    .card { padding: 12px; border-radius: 18px; }
+    .header { align-items: flex-start; flex-wrap: wrap; }
+    .header-title { min-width: 0; flex: 1 1 150px; }
+    .badge { margin-left: 50px; }
+    .smart-card, .call-panel { padding: 12px; border-radius: 16px; }
+    .smart-input-wrap { grid-template-columns: auto minmax(0, 1fr); padding: 0 10px; }
+    .smart-route-label { display: none; }
+    .smart-meta, .smart-trunk { width: 100%; }
+    .smart-trunk { justify-content: space-between; }
+    .smart-trunk input { width: min(58%, 140px); min-height: 36px; }
+    .call-actions > .btn { flex: 1 1 calc(50% - 4px); min-height: 44px; }
+    .call-actions > .btn-hangup { flex-basis: 100%; }
+    .status-bar { flex-wrap: wrap; row-gap: 6px; }
+    .status-bar span:last-child { margin-left: auto !important; }
+    .history-item { align-items: flex-start; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+      scroll-behavior: auto !important;
+      transition-duration: .01ms !important;
+      animation-duration: .01ms !important;
+      animation-iteration-count: 1 !important;
     }
   }
 `;

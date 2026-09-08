@@ -2,19 +2,19 @@
   "config": {
     "step": {
       "user": {
-        "title": "Connect to Simson Addon",
-        "description": "Enter the URL of the Simson addon's local API. If the addon is running on this HA instance, the default should work.",
+        "title": "Connect this Home Assistant to Simson",
+        "description": "Keep the default when the Simson add-on runs on this Home Assistant. Enter a different local API URL only when the add-on is hosted elsewhere on your network.",
         "data": {
-          "addon_url": "Addon API URL"
+          "addon_url": "Simson add-on API URL"
         }
       }
     },
     "error": {
-      "cannot_connect": "Cannot connect to the Simson addon. Make sure it is running."
+      "cannot_connect": "Cannot reach the Simson add-on. Check that it is running, then confirm the local API URL."
     },
     "abort": {
-      "already_configured": "This Simson node is already configured.",
-      "addon_not_ready": "The Simson addon is not ready yet. Please start it first."
+      "already_configured": "This Home Assistant is already connected to Simson.",
+      "addon_not_ready": "The Simson add-on is still starting. Wait a moment, then try again."
     }
   },
   "entity": {
