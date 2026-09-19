@@ -21,6 +21,8 @@ async _runAction(key, fn, minMs = 650) {
     this._lastActionAt[actionKey] = now;
     this._actionLocks.add(actionKey);
     this._actionError = '';
+    this._actionPending = 'Working…';
+    this._render();
     try {
       await Promise.resolve(fn());
     } catch (err) {
@@ -28,6 +30,8 @@ async _runAction(key, fn, minMs = 650) {
       this._actionError = err?.message || 'The action could not complete. Please retry.';
       this._render();
     } finally {
+      this._actionPending = '';
+      this._render();
       setTimeout(() => this._actionLocks.delete(actionKey), minMs);
     }
   }

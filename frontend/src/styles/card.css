@@ -563,3 +563,11 @@ footer span {
   max-height: 280px;
   overflow: auto;
 }
+.live-idle{padding:32px 0;text-align:center;display:grid;justify-items:center;gap:12px}
+.live-idle p{color:var(--muted);max-width:32ch;line-height:1.6;margin:0}
+.idle-indicator{width:48px;height:48px;border-radius:16px;background:var(--panel);border:1px solid var(--line)}
+.action-progress{padding:10px 14px;border-radius:10px;background:var(--panel);font-size:13px;margin:12px 0}
+.mode-history .intro,.mode-dial .intro{padding-top:8px}
+.heading{min-width:0}
+.heading h1{overflow-wrap:anywhere}
+@media(max-width:420px){.header{flex-wrap:wrap;gap:12px}.status{margin-left:auto}}

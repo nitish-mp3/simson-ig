@@ -13,7 +13,7 @@ class SimsonCardShell extends HTMLElement {
   }
 
   setConfig(config) {
-    this._config = config || {};
+    this._config = { view: this.constructor.defaultView || 'combined', ...config };
     this._card?.setConfig(this._config);
   }
 
@@ -62,7 +62,7 @@ class SimsonCardShell extends HTMLElement {
   }
 
   getCardSize() { return 5; }
-  getGridOptions() { return { columns: 12, rows: 6, min_columns: 6, min_rows: 4 }; }
+  getGridOptions() { return { columns: 12, rows: 'auto', min_columns: 6 }; }
   static getStubConfig() { return { type: 'custom:simson-relay-card', title: 'Simson' }; }
   static async getConfigElement() {
     await import('./editor.js');
@@ -72,6 +72,14 @@ class SimsonCardShell extends HTMLElement {
 
 for (const name of ['simson-relay-card', 'simson-card', 'simson-call-card']) {
   if (!customElements.get(name)) customElements.define(name, class extends SimsonCardShell {});
+}
+for (const [name, view] of [['simson-dial-card','dial'],['simson-live-call-card','live'],['simson-history-card','history'],['simson-devices-card','devices']]) {
+  if (!customElements.get(name)) customElements.define(name, class extends SimsonCardShell {
+    static defaultView = view;
+    static getStubConfig() { return {type: `custom:${name}`, view}; }
+  });
+  window.customCards ||= [];
+  if (!window.customCards.some(card => card.type === name)) window.customCards.push({type:name,name:`Simson ${view}`,description:`Independent ${view} panel; shares the node call session`,preview:true});
 }
 window.customCards ||= [];
 if (!window.customCards.some(card => card.type === 'simson-relay-card')) {

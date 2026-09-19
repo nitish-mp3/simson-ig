@@ -1,13 +1,5 @@
-import { html, nothing, unsafeCSS } from 'lit';
-import { CardBase } from './card-base.js';
-import { withHomeAssistant } from './controllers/home-assistant.js';
-import { withCallActions } from './controllers/call-actions.js';
-import { withMediaDevices } from './controllers/media-devices.js';
-import { withWebRTC } from './controllers/webrtc.js';
-import { withSipBridge } from './controllers/sip-bridge.js';
-import { withNotifications } from './controllers/notifications.js';
-import { withFormatting } from './shared/format.js';
-import { reconcileCall } from './controllers/call-state.js';
+import { LitElement, html, nothing, unsafeCSS } from 'lit';
+import { acquireSession, releaseSession } from './state/sessions.js';
 import { dialView } from './views/dial.js';
 import { callView } from './views/call.js';
 import { historyView } from './views/history.js';
@@ -16,94 +8,66 @@ import { dialogsView } from './views/dialogs.js';
 import styles from './styles/card.css';
 import { VERSION } from './version.js';
 
-const CardController = withFormatting(withNotifications(withSipBridge(withWebRTC(withMediaDevices(withCallActions(withHomeAssistant(CardBase)))))));
-
-export class SimsonCard extends CardController {
+export class SimsonCard extends LitElement {
   static styles = unsafeCSS(styles);
-
-  set hass(value) {
-    const previous = this._hass;
-    if (previous?.connection && previous.connection !== value?.connection) this._unsubscribeHAEvents();
-    this._hass = value;
-    if (!this._config.node_id && !this._detectedNodeId) this._autoDetectNodeId();
-    if (this.isConnected) this._connectHA();
-    const node = this._nodeId();
-    const suffixes = ['connection', 'call_state', 'active_call', 'calls_count'];
-    const changed = !previous || previous.user?.id !== value?.user?.id ||
-      suffixes.some(suffix => previous.states?.[`sensor.simson_${node}_${suffix}`] !== value?.states?.[`sensor.simson_${node}_${suffix}`]);
-    if (changed) this.requestUpdate();
-  }
-
-  _connectHA() {
-    if (!this._hass) return;
-    if (!this._haEventSubscribed) this._subscribeHAEvents();
-    if (!this._userHeartbeatInterval && this._hass.user) {
-      this._sendUserHeartbeat();
-      this._userHeartbeatInterval = setInterval(() => this._sendUserHeartbeat(), 20000);
-    }
-    if (!this._targetsLoaded && !this._targetsLoading) this._loadTargets();
-  }
-
-  connectedCallback() {
-    super.connectedCallback();
-    this._connectHA();
-    this._timerInterval = setInterval(() => this._updateTimer(), 1000);
-    navigator.mediaDevices?.addEventListener?.('devicechange', this._deviceChangeHandler);
-  }
-
-  disconnectedCallback() {
-    super.disconnectedCallback();
-    clearInterval(this._timerInterval);
-    clearInterval(this._userHeartbeatInterval);
-    clearTimeout(this._incomingCallTimeout);
-    this._userHeartbeatInterval = null;
-    this._unsubscribeHAEvents();
-    navigator.mediaDevices?.removeEventListener?.('devicechange', this._deviceChangeHandler);
-    this._stopMediaPreview(false);
-    this._cleanupWebRTC();
-    this._removeUserPicker();
-  }
-
-  _render() { this.requestUpdate(); }
-
-  willUpdate() {
-    this._view = this._nodeId() ? reconcileCall.call(this) : null;
-    if (this._view?.hasCall) this._stopMediaPreview(false);
-  }
-
-  updated() {
-    this._attachMediaElements();
-    this._updateTimer();
-  }
-
-  _selectTab(tab) {
-    if (tab !== 'media') this._stopMediaPreview(false);
-    this._activeTab = tab;
-    if (tab === 'history' && !this._historyLoaded) this._loadHistory();
-    if (tab === 'media') this._refreshMediaDevices(false);
+  constructor() { super(); this._config = {}; }
+  setConfig(config) {
+    this._config = config || {};
+    this._bindSession();
     this.requestUpdate();
   }
-
+  set hass(value) {
+    this._hass = value;
+    this._bindSession();
+    if (this.session) this.session.hass = value;
+  }
+  _bindSession() {
+    if (!this.isConnected || !this._hass) return;
+    const session = acquireSession(this, this._hass, this._config);
+    if (this.session !== session) {
+      if (this.session) releaseSession(this.session, this);
+      this.session = session;
+      this.requestUpdate();
+    }
+  }
+  connectedCallback() { super.connectedCallback(); this._bindSession(); }
+  disconnectedCallback() {
+    super.disconnectedCallback();
+    if (this.session) releaseSession(this.session, this);
+    this.session = null;
+  }
+  updated() {
+    if (!this.session) return;
+    this.session._viewHost = this;
+    this.session._attachMediaElements();
+    this.session._updateTimer();
+  }
   render() {
-    const view = this._view;
-    return html`<article class="surface">
-      <header class="header">
-        <span class="brand-mark" aria-hidden="true">S</span>
-        <div class="heading"><span class="eyebrow">YOUR CONNECTION SPACE</span><h1>${this._config.title || 'Simson'}</h1></div>
-        <span class="status ${view?.connected ? 'online' : ''}"><i></i>${view?.connected ? 'Connected' : 'Offline'}</span>
-      </header>
-      ${!view ? html`<div class="empty"><h2>Waiting for your node</h2><p>The card is ready. Your Simson integration will connect here.</p></div>` : html`
-        ${this._actionError ? html`<div class="notice error" role="alert">${this._actionError}</div>` : nothing}
-        ${this._mediaDeviceError && view.hasCall ? html`<div class="notice" role="status">${this._mediaDeviceError}</div>` : nothing}
-        ${view.hasCall ? callView(this, view) : html`
-          <nav class="tabs" aria-label="Call workspace">${[['dial','Call'],['history','Recent'],['media','Devices']].map(([id,label]) => html`<button aria-current=${this._activeTab === id ? 'page' : 'false'} class=${this._activeTab === id ? 'selected' : ''} @click=${() => this._selectTab(id)}>${label}</button>`)}</nav>
-          ${this._activeTab === 'history' ? historyView(this) : this._activeTab === 'media' ? mediaView(this) : dialView(this, view)}
-        `}
+    const host = this.session;
+    const view = host?._view;
+    const mode = this._config.view || 'combined';
+    const title = this._config.title || ({dial:'Dial a call',live:'Live call',history:'Recent calls',devices:'Call devices'}[mode] || 'Simson');
+    const panel = host?._activeTab || 'dial';
+    const peers = host ? [...host.views] : [];
+    const pickerOwner = peers.find(item => ['dial','combined'].includes(item._config.view || 'combined'));
+    const liveOwner = peers.find(item => item._config.view === 'live') || pickerOwner;
+    const showDialog = host && (host._pickerOpen ? pickerOwner === this : liveOwner === this);
+    return html`<article class="surface mode-${mode}">
+      <header class="header"><span class="brand-mark" aria-hidden="true">S</span><div class="heading"><span class="eyebrow">SIMSON · ${mode === 'combined' ? 'CALL WORKSPACE' : mode.toUpperCase()}</span><h1>${title}</h1></div><span class="status ${view?.connected ? 'online' : ''}"><i></i>${view?.connected ? 'Connected' : 'Offline'}</span></header>
+      ${!view ? html`<div class="empty"><h2>Waiting for your node</h2><p>Select a Simson node in the card editor, or wait for the integration to connect.</p></div>` : html`
+        ${!view.connected ? html`<div class="notice" role="status"><b>Node is offline</b><br>Calling resumes when the addon reconnects. Your saved contacts remain available.</div>` : nothing}
+        ${host._actionError ? html`<div class="notice error" role="alert">${host._actionError}</div>` : nothing}
+        ${host._actionPending ? html`<div class="action-progress" role="status">${host._actionPending}</div>` : nothing}
+        ${mode === 'live' ? (view.hasCall ? callView(host,view) : html`<div class="live-idle"><span class="idle-indicator"></span><h2>Ready for your next call</h2><p>Answer, mute, video and hang-up controls appear here during a call.</p></div>`) :
+          mode === 'history' ? historyView(host) : mode === 'devices' ? mediaView(host) : mode === 'dial' ? (panel === 'media' ? html`<button class="text-button" @click=${()=>host._selectTab('dial')}>← Back to dialing</button>${mediaView(host)}` : dialView(host,view)) : html`
+            ${view.hasCall ? callView(host,view) : nothing}
+            <nav class="tabs" aria-label="Call workspace">${[['dial','Dial'],['history','Recent'],['media','Devices']].map(([id,label])=>html`<button class=${panel===id?'selected':''} aria-current=${panel===id?'page':'false'} @click=${()=>host._selectTab(id)}>${label}</button>`)}</nav>
+            ${panel==='history'?historyView(host):panel==='media'?mediaView(host):view.hasCall?html`<p class="fine-print">End the current call before starting another.</p>`:dialView(host,view)}
+          `}
       `}
-      ${dialogsView(this)}
-      <footer><span>${this._nodeId() || 'Connecting node'}</span><span>Simson ${VERSION}</span></footer>
+      ${showDialog ? dialogsView(host) : nothing}
+      <footer><span>${host?._nodeId() || 'Connecting node'}</span><span>v${VERSION}</span></footer>
     </article>`;
   }
 }
-
 if (!customElements.get('simson-card-runtime')) customElements.define('simson-card-runtime', SimsonCard);

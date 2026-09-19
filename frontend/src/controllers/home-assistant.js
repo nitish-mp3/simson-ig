@@ -315,11 +315,14 @@ async _loadTargets() {
     }
   }
 
-_loadHistory() {
-    if (!this._hass) return;
-    try {
-      this._hass.callService("simson", "get_call_history", { limit: 50 });
-    } catch (e) { /* ignore */ }
+async _loadHistory() {
+      if (!this._hass) return;
+      try {
+        await this._hass.callService("simson", "get_call_history", { limit: 50 });
+      } catch (error) {
+        this._actionError = `Could not load recent calls: ${error.message || 'connection failed'}`;
+        this._render();
+      }
   }
 
 _fetchRemoteUsers(nodeId) {

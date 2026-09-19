@@ -21,7 +21,8 @@ export function reconcileCall() {
         (!targetUserId || targetUserId === myUserId) &&
         (!answeredByUserId || answeredByUserId === myUserId)) ||
       (direction === "outgoing" && (!callerUserId || callerUserId === myUserId));
-    const effectiveCallState = isMyCall ? callState : "idle";
+    const liveStates = ['incoming', 'requesting', 'ringing', 'active'];
+    const effectiveCallState = isMyCall && liveStates.includes(callState) && callId ? callState : 'idle';
 
     const isIdle = effectiveCallState === "idle" || effectiveCallState === "unknown";
     const isIncoming = effectiveCallState === "incoming" && direction !== "outgoing" && !this._isCaller;
@@ -30,7 +31,7 @@ export function reconcileCall() {
     const isMissed = effectiveCallState === "missed";
     const isDeclined = effectiveCallState === "declined";
     const isTimeout = effectiveCallState === "timeout";
-    const hasCall = !isIdle && !isMissed && !isDeclined && !isTimeout;
+    const hasCall = isIncoming || isRinging || isActive;
     const hasWebRTC = !!this._pc;
     const activeCallType = this._activeCallAttr("call_type", "");
     const activeSipBridgeId = this._activeCallAttr("sip_bridge_id", "");
@@ -112,4 +113,3 @@ export function reconcileCall() {
 
 return {nodeId, connected, direction, isIdle, isIncoming, isRinging, isActive, hasCall, activeCallType, remoteLabel, callId};
 }
-

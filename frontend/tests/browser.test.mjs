@@ -75,12 +75,12 @@ test('cold loads consistently, keeps input and audio DOM stable on HA updates',a
   await page.locator('#node-input').fill('7016');
   const result=await page.evaluate(async()=>{
     const card=document.querySelector('simson-relay-card')._card;
-    const input=card.shadowRoot.querySelector('#node-input');const audio=card._remoteAudio;
+    const input=card.shadowRoot.querySelector('#node-input');const audio=card.session._remoteAudio;
     let renders=0;const render=card.render.bind(card);card.render=()=>{renders++;return render();};
     for(let index=0;index<100;index++)card.hass={...window.mockHass,states:{...window.mockHass.states,['sensor.unrelated_'+index]:{state:index}}};
     await card.updateComplete;
-    card._render();await card.updateComplete;
-    return{sameInput:input===card.shadowRoot.querySelector('#node-input'),sameAudio:audio===card._remoteAudio,value:input.value,renders};
+    card.session._render();await card.session.updateComplete;await card.updateComplete;
+    return{sameInput:input===card.shadowRoot.querySelector('#node-input'),sameAudio:audio===card.session._remoteAudio,value:input.value,renders};
   });
   assert.deepEqual(result,{sameInput:true,sameAudio:true,value:'7016',renders:1});
   assert.deepEqual(errors,[]);
@@ -105,13 +105,13 @@ test('device preview persists through renders and releases tracks on navigation'
   await page.getByRole('button',{name:'Devices',exact:true}).click();
   await page.getByRole('checkbox').check();
   await page.getByRole('button',{name:'Test devices',exact:true}).click();
-  await page.waitForFunction(()=>document.querySelector('simson-relay-card')._card._mediaPreviewStream?.getVideoTracks().length);
+  await page.waitForFunction(()=>document.querySelector('simson-relay-card')._card.session._mediaPreviewStream?.getVideoTracks().length);
   const stable=await page.evaluate(async()=>{
-    const card=document.querySelector('simson-relay-card')._card;window.preview=card._mediaPreviewStream;
-    const video=card.shadowRoot.querySelector('#media-local-preview');card._render();await card.updateComplete;
+    const card=document.querySelector('simson-relay-card')._card;window.preview=card.session._mediaPreviewStream;
+    const video=card.shadowRoot.querySelector('#media-local-preview');card.session._render();await card.session.updateComplete;await card.updateComplete;
     return video===card.shadowRoot.querySelector('#media-local-preview') && video.srcObject===window.preview;
   });assert.equal(stable,true);
-  await page.getByRole('button',{name:'Call',exact:true}).click();
+  await page.getByRole('button',{name:'Dial',exact:true}).click();
   assert.equal(await page.evaluate(()=>window.preview.getTracks().every(track=>track.readyState==='ended')),true);
   await page.close();
 });
@@ -138,6 +138,28 @@ test('mobile card and addon pages render without horizontal overflow or JS error
   assert.deepEqual(errors,[]);await page.close();
 });
 
+test('addon device and routing sections preserve drafts when collapsed or filtered',async()=>{
+  try {await access(path.join(root,'addon/app/ui/app.js'));}catch{return;}
+  const page=await browser.newPage({viewport:{width:1280,height:900}});
+  await page.route('**/addon/api/sip-endpoints',route=>route.fulfill({json:[{id:'1040',extension:'1040',username:'1040',description:'Kitchen',registered:true}]}));
+  await page.goto(origin+'/addon/');
+  await page.locator('#content .grid').first().waitFor();
+  await page.locator('[data-page="sip"]').first().click();
+  await page.getByText('Configure 1040 Kitchen',{exact:true}).click();
+  const field=page.locator('[data-sip-id="1040"][data-sip-key="description"]');
+  await field.fill('Kitchen draft');
+  const search=page.getByPlaceholder('Filter by name, extension or status');
+  await search.fill('no match');assert.equal(await field.isVisible(),false);
+  await search.fill('1040');assert.equal(await field.inputValue(),'Kitchen draft');
+  await page.screenshot({path:path.join(integrationRoot,'frontend/test-results/addon-devices.png'),fullPage:true});
+  await page.locator('[data-page="routing"]').first().click();
+  await page.getByRole('button',{name:'Multi-level routes',exact:true}).click();
+  assert.equal(await page.locator('.advanced-routing').isVisible(),true);
+  await page.getByRole('button',{name:'Destinations',exact:true}).click();
+  assert.equal(await page.locator('.advanced-routing').isVisible(),false);
+  await page.close();
+});
+
 test('a failed runtime download displays retry and recovers without a dashboard refresh',async()=>{
   const page=await browser.newPage();let blocked=true;
   await page.route('**/chunks/card-*.js*',route=>blocked ? route.abort('failed') : route.continue());
@@ -150,11 +172,40 @@ test('a failed runtime download displays retry and recovers without a dashboard 
   await page.locator('simson-card-runtime').waitFor();await page.close();
 });
 
+test('split cards share one session and offline states never show phantom calls',async()=>{
+  const page=await browser.newPage();await load(page);
+  await page.evaluate(()=>{
+    for(const type of ['simson-dial-card','simson-live-call-card','simson-history-card']) {
+      const shell=document.createElement(type);
+      shell.setConfig({node_id:'office'});shell.hass=window.mockHass;
+      document.querySelector('#mount').append(shell);
+    }
+  });
+  await page.getByRole('heading',{name:'Ready for your next call'}).waitFor();
+  assert.equal(await page.evaluate(()=>document.querySelectorAll('simson-call-session').length),1);
+  for(const state of ['unavailable','unknown','ended','failed']) {
+    await page.evaluate(state=>{
+      window.mockHass={...window.mockHass,states:{...window.mockHass.states,'sensor.simson_office_connection':{state:'unavailable',attributes:{}},'sensor.simson_office_call_state':{state,attributes:{}}}};
+      document.querySelectorAll('#mount > *').forEach(shell=>shell.hass=window.mockHass);
+    },state);
+    await page.waitForTimeout(30);
+    assert.equal(await page.getByRole('button',{name:'End call',exact:true}).count(),0);
+  }
+  await page.screenshot({path:path.join(integrationRoot,'frontend/test-results/split-cards.png'),fullPage:true});
+  await page.evaluate(()=>document.querySelector('simson-relay-card').remove());
+  assert.equal(await page.evaluate(()=>document.querySelectorAll('simson-call-session').length),1);
+  assert.equal(await page.evaluate(()=>window.unsubscribed),0);
+  await page.evaluate(()=>document.querySelector('#mount').replaceChildren());
+  await page.waitForFunction(()=>!document.querySelector('simson-call-session'));
+  assert.ok(await page.evaluate(()=>window.unsubscribed)>0);
+  await page.close();
+});
+
 test('two browser nodes exchange audio and video and release devices after hangup',async()=>{
   const page=await browser.newPage();await load(page);
   await page.evaluate(async()=>{
-    const first=document.querySelector('simson-relay-card')._card;
-    const second=document.createElement('simson-card-runtime');second.setConfig({node_id:'studio'});document.body.append(second);
+    const first=document.querySelector('simson-relay-card')._card.session;
+    const second=document.createElement('simson-call-session');second.setConfig({node_id:'studio'});document.body.append(second);
     window.peers=[first,second];window.signalErrors=[];
     for(const [index,peer] of window.peers.entries()) {
       peer._render=()=>{};
