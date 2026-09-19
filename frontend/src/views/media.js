@@ -1,0 +1,14 @@
+import { html, nothing } from 'lit';
+
+export function mediaView(host) {
+  const devices = host._mediaDevices;
+  const select = (label, items, property) => html`<label class="field"><span>${label}</span><select .value=${host[property]} @change=${event => {host[property]=event.target.value;host._saveMediaPreferences();if(host._mediaPreviewStream)host._startMediaPreview();host.requestUpdate();}}><option value="">System default</option>${items.map((device,index) => html`<option value=${device.deviceId}>${device.label || label+' '+(index+1)}</option>`)}</select></label>`;
+  return html`<section class="media-workspace"><div class="section-heading"><div><span class="eyebrow">READY WHEN YOU ARE</span><h2>Your devices</h2></div><button @click=${() => host._runAction('detect',()=>host._refreshMediaDevices(true))}>Detect</button></div>
+    ${host._mediaDeviceError ? html`<div class="notice error" role="alert">${host._mediaDeviceError}</div>` : nothing}
+    <div class="preview"><video id="media-local-preview" autoplay muted playsinline></video>${!host._mediaPreviewStream?.getVideoTracks().length ? html`<div class="preview-empty"><b>${host._videoEnabled ? 'Camera preview' : 'Audio-only mode'}</b><small>${globalThis.isSecureContext ? 'Your preview stays on this device' : 'Open Home Assistant over HTTPS for camera access'}</small></div>` : nothing}<span class="live-label">${host._mediaPreviewStream ? 'PREVIEW ON' : 'PRIVATE'}</span></div>
+    <label class="toggle"><span><b>Video for node calls</b><small>Share your camera when you connect</small></span><input type="checkbox" .checked=${host._videoEnabled} @change=${event => {host._videoEnabled=event.target.checked;host._saveMediaPreferences();if(host._mediaPreviewStream)host._startMediaPreview();host.requestUpdate();}}></label>
+    <div class="device-grid">${select('Microphone',devices.audioInputs,'_selectedAudioInput')}${select('Camera',devices.videoInputs,'_selectedVideoInput')}${select('Speaker',devices.audioOutputs,'_selectedAudioOutput')}</div>
+    <div class="call-actions"><button class="primary" ?disabled=${!navigator.mediaDevices?.getUserMedia} @click=${() => host._runAction('preview',()=>host._startMediaPreview())}>${host._mediaPreviewStream ? 'Restart preview' : 'Test devices'}</button>${host._mediaPreviewStream ? html`<button @click=${() => host._stopMediaPreview()}>Stop preview</button>` : nothing}</div><p class="fine-print">Device choices stay in this browser. Speaker selection depends on browser support.</p>
+    ${host._notifPermission === 'default' ? html`<button class="text-button" @click=${() => host._requestNotificationPermission()}>Enable incoming-call notifications</button>` : nothing}
+  </section>`;
+}

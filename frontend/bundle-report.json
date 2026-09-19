@@ -1,0 +1,26 @@
+{
+  "simson-card.js": {
+    "bytes": 2075,
+    "gzip": 1056
+  },
+  "chunks/sip-ua-IK5YL6VZ.js": {
+    "bytes": 12679,
+    "gzip": 4253
+  },
+  "chunks/card-O3MMPRSQ.js": {
+    "bytes": 61969,
+    "gzip": 17112
+  },
+  "chunks/chunk-JYZPUAGQ.js": {
+    "bytes": 30,
+    "gzip": 50
+  },
+  "chunks/editor-3GLT772W.js": {
+    "bytes": 1024,
+    "gzip": 530
+  },
+  "chunks/chunk-KLUKP4ZZ.js": {
+    "bytes": 15052,
+    "gzip": 5881
+  }
+}

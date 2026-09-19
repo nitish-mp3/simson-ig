@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import logging
 from datetime import timedelta
-from pathlib import Path
 from urllib.parse import unquote
 
 import aiohttp
@@ -15,13 +14,12 @@ from homeassistant.const import Platform
 from homeassistant.core import Event, HomeAssistant, ServiceCall, callback
 from homeassistant.exceptions import ConfigEntryNotReady, HomeAssistantError
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
-from homeassistant.components.http import HomeAssistantView, StaticPathConfig
-from homeassistant.components.frontend import add_extra_js_url
-from homeassistant.components.lovelace.const import LOVELACE_DATA, MODE_STORAGE
+from homeassistant.components.http import HomeAssistantView
 
 from aiohttp import web
 
 from .api import SimsonApiClient
+from .frontend import async_register_card as _async_register_card
 from .const import (
     DOMAIN,
     CONF_ADDON_URL,
@@ -45,66 +43,13 @@ from .const import (
 logger = logging.getLogger(__name__)
 
 SCAN_INTERVAL = timedelta(seconds=5)
-_CARD_JS_PATH = "/simson/www/simson-card.js"
-_CARD_VERSION = "4.8.18"
-_CARD_URL = f"{_CARD_JS_PATH}?v={_CARD_VERSION}"
 _CALL_ACTION_VIEW_HASS_IDS: set[int] = set()
-_CARD_REGISTERED_HASS_IDS: set[int] = set()
 
 
 async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     """Register the card independently of addon/config-entry availability."""
     await _async_register_card(hass)
     return True
-
-
-async def _async_register_card(hass: HomeAssistant) -> None:
-    """Serve and load the card once, even while the addon is reconnecting."""
-    hass_id = id(hass)
-    if hass_id in _CARD_REGISTERED_HASS_IDS:
-        return
-    try:
-        await hass.http.async_register_static_paths([
-            StaticPathConfig(
-                "/simson/www",
-                str(Path(__file__).parent / "www"),
-                cache_headers=False,
-            )
-        ])
-    except Exception:
-        pass  # Another Simson entry/reload may already own this static path.
-    add_extra_js_url(hass, _CARD_URL)
-    await _async_register_lovelace_resource(hass)
-    _CARD_REGISTERED_HASS_IDS.add(hass_id)
-
-
-async def _async_register_lovelace_resource(hass: HomeAssistant) -> None:
-    """Make fresh/mobile dashboard loads wait for the versioned card module."""
-    try:
-        lovelace = hass.data.get(LOVELACE_DATA)
-        if not lovelace or lovelace.resource_mode != MODE_STORAGE:
-            return
-        resources = lovelace.resources
-        await resources.async_get_info()  # Ensure the storage collection is loaded.
-        current = None
-        legacy = None
-        for item in resources.async_items() or []:
-            url = str(item.get("url") or "")
-            path = url.split("?", 1)[0]
-            if path == _CARD_JS_PATH:
-                current = item
-                break
-            if path == "/local/simson-call-card.js":
-                legacy = item
-
-        existing = current or legacy
-        if existing:
-            if existing.get("url") != _CARD_URL:
-                await resources.async_update_item(existing["id"], {"url": _CARD_URL})
-            return
-        await resources.async_create_item({"url": _CARD_URL, "res_type": "module"})
-    except Exception as err:  # Dynamic frontend module registration remains the fallback.
-        logger.warning("Could not persist the Simson Lovelace card resource: %s", err)
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:

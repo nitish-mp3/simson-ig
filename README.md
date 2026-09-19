@@ -55,7 +55,7 @@ If the card picker still only shows **Manual**, the frontend has not loaded the 
 2. Add this resource:
 
 ```
-URL: /simson/www/simson-card.js?v=4.8.18
+URL: /simson/www/simson-card.js?v=5.0.0
 Type: JavaScript Module
 ```
 
@@ -86,7 +86,7 @@ Check these in order:
 1. **Downloaded is not enough**: add **Simson Call Relay** from **Settings -> Devices & Services -> Add Integration**.
 2. Confirm the addon is running and reachable at the URL entered during setup.
 3. Open `/simson/www/simson-card.js` in the HA browser. If it returns 404, the integration is not loaded.
-4. Add `/simson/www/simson-card.js?v=4.8.18` as a Dashboard Resource and reload the dashboard.
+4. Add `/simson/www/simson-card.js?v=5.0.0` as a Dashboard Resource and reload the dashboard.
 
 ## SIP Phone / Landline Routing
 
@@ -99,6 +99,14 @@ SIP desk phones and ATA-backed landline handsets are configured in the addon pan
 5. Configure the SIP phone/ATA with the VPS hostname, port `5060`, TCP or UDP transport, endpoint username/password, and PCMU/PCMA codecs only.
 
 The browser card audio bridge is automatic. Do not add manual SIP-over-WebSocket settings in the integration.
+
+## Browser Audio and Video
+
+Open the card's **Devices** tab to grant browser permission, select a microphone, camera, and supported speaker output, and run a private preview. Choices remain in that browser. Enable **Video for node calls** to send camera video during node-to-node WebRTC calls; SIP, FXO/GSM gateway, and PSTN calls remain audio-only.
+
+The frontend now uses Lit components and separately loaded feature modules. The loader registers immediately and shows a retry state if downloading the card fails. Development instructions are in [frontend/README.md](frontend/README.md). When installing manually, copy the complete `www/` folder including `chunks/`, not just the loader file.
+
+If camera access fails or the selected camera disappears, the call retries with microphone-only media instead of failing. Browser media access requires HTTPS or localhost. LAN camera discovery is managed through the addon's authenticated SIP endpoint inventory rather than unsafe browser subnet scanning.
 
 For GSM/PSTN callback from the card, use **Phone via Gateway**, enter a number like `+9192387324`, and keep the trunk field as `7009` for the current Synway GSM gateway.
 
