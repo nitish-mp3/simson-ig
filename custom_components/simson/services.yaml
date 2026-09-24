@@ -22,7 +22,7 @@ make_call:
             - "intercom"
     target_id:
       name: Target ID
-      description: Configured target ID from the Simson addon settings.
+      description: Configured target ID. When phone_number and source_extension are set, this may be the outbound gateway extension (prefer the trunk field).
       required: false
       example: "front_gate"
       selector:
@@ -36,7 +36,7 @@ make_call:
         text:
     trunk:
       name: SIP/PSTN Trunk
-      description: Gateway/trunk endpoint to use for outside calls. Leave blank to use the addon's default gateway.
+      description: Gateway/trunk endpoint to use for outside calls. For an automated handset callback, set this to the gateway extension (for example 7009 or 7016); blank uses the addon's default gateway.
       required: false
       example: "7013"
       selector:
@@ -50,7 +50,7 @@ make_call:
         text:
     source_extension:
       name: Source SIP Extension
-      description: Optional SIP extension to call first when creating a direct SIP intercom/bridge. Use with Target SIP Extension.
+      description: SIP handset to call first. Combine with phone_number to have this handset auto-answer and call out through trunk; combine with target_extension for SIP intercom.
       required: false
       example: "1027"
       selector:
