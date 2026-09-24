@@ -2,18 +2,42 @@ import { ICE_SERVERS } from '../transport/ice.js';
 export const withWebRTC = Base => class extends Base {
 async _fetchWebRTCConfig() {
     if (this._webrtcConfig) return this._webrtcConfig; // cache
+    if (this._webrtcConfigPromise) return this._webrtcConfigPromise;
+    if (Date.now() < (this._webrtcConfigNextRetryAt || 0)) {
+      return { ice_servers: ICE_SERVERS, sip: { enabled: false } };
+    }
+    this._webrtcConfigPromise = (async () => {
+      try {
+        const token = this._hass?.auth?.data?.access_token;
+        const resp = await fetch("/api/webrtc-config", {
+          headers: token ? { Authorization: "Bearer " + token } : {},
+          signal: AbortSignal.timeout(8000),
+        });
+        if (resp.ok) {
+          this._webrtcConfig = await resp.json();
+          this._webrtcConfigNextRetryAt = 0;
+          return this._webrtcConfig;
+        }
+      } catch (e) { /* fall through to defaults */ }
+      this._webrtcConfigNextRetryAt = Date.now() + 30000;
+      return { ice_servers: ICE_SERVERS, sip: { enabled: false } };
+    })();
     try {
-      const token = this._hass?.auth?.data?.access_token;
-      const resp = await fetch("/api/webrtc-config", {
-        headers: token ? { Authorization: "Bearer " + token } : {},
-        signal: AbortSignal.timeout(8000),
-      });
-      if (resp.ok) {
-        this._webrtcConfig = await resp.json();
-        return this._webrtcConfig;
-      }
-    } catch (e) { /* fall through to defaults */ }
-    return { ice_servers: ICE_SERVERS, sip: { enabled: false } };
+      const config = await this._webrtcConfigPromise;
+      this._turnAvailable = this._hasTurnRelay(config);
+      if (this.isConnected) this._render();
+      return config;
+    } finally {
+      this._webrtcConfigPromise = null;
+    }
+  }
+
+_hasTurnRelay(config) {
+    const servers = Array.isArray(config?.ice_servers) ? config.ice_servers : [];
+    return servers.some(server => {
+      const urls = Array.isArray(server.urls) ? server.urls : [server.urls];
+      return urls.some(url => /^(turn|turns):/i.test(String(url || "")));
+    });
   }
 
 async _startWebRTC() {
@@ -24,30 +48,29 @@ async _startWebRTC() {
     const generation = this._rtcGeneration = (this._rtcGeneration || 0) + 1;
     try {
 
-    // Fetch TURN-enabled ICE servers before creating the PeerConnection.
-    const wrtcCfg = await this._fetchWebRTCConfig();
-    if (generation !== this._rtcGeneration || !this.isConnected) return;
-    const iceServers = wrtcCfg.ice_servers || ICE_SERVERS;
-
-    // Try mic — works on HTTP for localhost/local IPs too. Never hard-block on context.
-    if (navigator.mediaDevices?.getUserMedia) {
+    const mediaPromise = (async () => {
+      if (!navigator.mediaDevices?.getUserMedia) {
+        this._micAllowed = false;
+        return;
+      }
       try {
-        const activeType = this._activeCallAttr("call_type", "") || this._incomingCallType || "voice";
-        const useVideo = this._videoEnabled && !["sip", "gateway", "pstn"].includes(activeType);
-        const stream = await this._captureMedia(useVideo);
+        const activeType = this._currentCallType || this._activeCallAttr("call_type", "") || this._incomingCallType || "voice";
+        const stream = await this._captureMedia(["video", "webrtc-video"].includes(activeType));
         if (generation !== this._rtcGeneration || !this.isConnected) {
           stream.getTracks().forEach(track => track.stop());
           return;
         }
         this._localStream = stream;
         this._micAllowed = true;
-      } catch (e) {
+      } catch (error) {
         this._micAllowed = false;
-        // Continue anyway — remote audio still plays without microphone access.
+        this._mediaDeviceError = error?.message || "Allow microphone access to speak.";
       }
-    } else {
-      this._micAllowed = false;
-    }
+    })();
+    const [wrtcCfg] = await Promise.all([this._fetchWebRTCConfig(), mediaPromise]);
+    if (generation !== this._rtcGeneration || !this.isConnected) return;
+    const iceServers = Array.isArray(wrtcCfg.ice_servers) ? wrtcCfg.ice_servers : ICE_SERVERS;
+    this._turnAvailable = this._hasTurnRelay({ ice_servers: iceServers });
 
     if (generation !== this._rtcGeneration || !this.isConnected) return;
     this._pc = new RTCPeerConnection({ iceServers });
@@ -111,6 +134,9 @@ async _startWebRTC() {
           return;
         }
         this._audioQuality = 0;
+        this._mediaDeviceError = this._turnAvailable
+          ? "The media connection failed. Check network/firewall access and try again."
+          : "The media connection failed. This server has no TURN relay; restrictive networks need coturn enabled.";
         this._cleanupWebRTC();
       }
       this._render();
@@ -136,7 +162,8 @@ async _startWebRTC() {
 async _handleWebRTCSignal(event) {
     const { call_id, from_node_id, signal_type, data } = event;
 
-    if (call_id && this._currentCallId && call_id !== this._currentCallId) return;
+    if (!call_id || !this._currentCallId || call_id !== this._currentCallId) return;
+    if (from_node_id && this._currentRemoteNode && from_node_id !== this._currentRemoteNode) return;
 
     if (signal_type === "offer") {
       if (this._startingWebRTC) { this._pendingOffer = event; return; }
@@ -149,17 +176,16 @@ async _handleWebRTCSignal(event) {
         await this._pc.setLocalDescription({ type: "rollback" });
       }
 
-      // Callee: add local tracks now (before creating answer) so SDP includes audio.
+      await this._pc.setRemoteDescription(new RTCSessionDescription(data));
       if (!this._isCaller && this._localStream) {
+        const offeredKinds = new Set([...String(data?.sdp || "").matchAll(/^m=(audio|video)\s/gm)].map(match => match[1]));
         const existingSenders = this._pc.getSenders();
-        if (!existingSenders.some(s => s.track)) {
-          this._localStream.getTracks().forEach(track => {
-            this._pc.addTrack(track, this._localStream);
-          });
-        }
+        this._localStream.getTracks()
+          .filter(track => offeredKinds.has(track.kind))
+          .filter(track => !existingSenders.some(sender => sender.track?.kind === track.kind))
+          .forEach(track => this._pc.addTrack(track, this._localStream));
       }
 
-      await this._pc.setRemoteDescription(new RTCSessionDescription(data));
       await this._pc.setLocalDescription();
       this._sendWebRTCSignal("answer", {
         sdp: this._pc.localDescription.sdp,

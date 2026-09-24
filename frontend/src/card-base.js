@@ -86,6 +86,7 @@ constructor() {
 
     // Call context
     this._currentCallId = null;
+    this._currentCallType = "";
     this._currentRemoteNode = null;
     this._isCaller = false;       // true = we placed the call (we create offer)
     this._polite = false;
@@ -173,4 +174,3 @@ setConfig(config) {
     this._render();
   }
 }
-

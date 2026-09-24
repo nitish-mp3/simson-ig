@@ -1,6 +1,7 @@
 export const withCallActions = Base => class extends Base {
-_beginOutgoingCall(remoteNode) {
+_beginOutgoingCall(remoteNode, callType) {
     this._currentRemoteNode = remoteNode || this._currentRemoteNode;
+    this._currentCallType = callType || "";
     this._callStart = null;
     this._isCaller = true;
     this._polite = false;
@@ -14,6 +15,7 @@ _beginOutgoingCall(remoteNode) {
       if (!this._isCaller || this._currentCallId || !this._outgoingIntentAt) return;
       this._outgoingIntentAt = 0;
       this._isCaller = false;
+      this._currentCallType = "";
       this._actionError = 'No call status came back from the node. Check the gateway or SIP phone registration, then retry.';
       this._render();
     }, 45000);
@@ -59,8 +61,9 @@ _bindAction(el, key, fn, minMs = 650) {
 
 _dial(nodeId, targetUserId, targetUserName) {
     if (!nodeId) return;
-    this._beginOutgoingCall(nodeId);
-    const data = { target_node_id: nodeId, call_type: this._videoEnabled ? "video" : "voice", caller_user_id: this._hass?.user?.id || "" };
+    const callType = this._videoEnabled ? "video" : "voice";
+    this._beginOutgoingCall(nodeId, callType);
+    const data = { target_node_id: nodeId, call_type: callType, caller_user_id: this._hass?.user?.id || "" };
     if (targetUserId) {
       data.target_user_id = targetUserId;
       data.target_user_name = targetUserName || "";
@@ -69,11 +72,12 @@ _dial(nodeId, targetUserId, targetUserName) {
   }
 
 _dialTarget(targetId, targetType, nodeId) {
-    this._beginOutgoingCall(nodeId || targetId);
     const sipTypes = ["asterisk", "sip", "gateway"];
+    const callType = sipTypes.includes(targetType) ? "sip" : this._videoEnabled ? "video" : "voice";
+    this._beginOutgoingCall(nodeId || targetId, callType);
     return this._callService("make_call", {
       target_id: targetId,
-      call_type: sipTypes.includes(targetType) ? "sip" : this._videoEnabled ? "video" : "voice",
+      call_type: callType,
       caller_user_id: this._hass?.user?.id || "",
     });
   }
@@ -84,7 +88,7 @@ _dialSIPExtension(extension) {
       const trunk = this._effectivePstnTrunk();
       return this._dialPSTNNumber(extension, trunk);
     }
-    this._beginOutgoingCall(extension);
+    this._beginOutgoingCall(extension, "sip");
     return this._callService("make_call", {
       target_id: `asterisk_${extension}`,
       call_type: "sip",
@@ -97,7 +101,7 @@ _dialPSTNNumber(number, trunk = "") {
     const digits = cleaned.replace(/^\+/, "");
     if (!digits) return;
     const effectiveTrunk = String(trunk || this._effectivePstnTrunk()).trim();
-    this._beginOutgoingCall(`phone:${cleaned}`);
+    this._beginOutgoingCall(`phone:${cleaned}`, "sip");
     return this._callService("make_call", {
       phone_number: cleaned,
       trunk: effectiveTrunk,
@@ -117,6 +121,7 @@ _clearLocalCallState() {
     this._outgoingUiTimer = null;
     this._callStart = null;
     this._currentCallId = null;
+    this._currentCallType = "";
     this._currentRemoteNode = null;
     this._sipBridgeId = null;
     this._isCaller = false;
@@ -170,6 +175,7 @@ _reject() {
     this._dismissBrowserNotification();
     this._ignoredCallId = callId;
     this._currentCallId = null;
+    this._currentCallType = "";
     this._currentRemoteNode = null;
     this._sipBridgeId = null;
     this._isCaller = false;

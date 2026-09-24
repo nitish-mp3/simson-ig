@@ -30,6 +30,7 @@ export class CallSession extends CardController {
   _connectHA() {
     if (!this._hass) return;
     if (!this._haEventSubscribed) this._subscribeHAEvents();
+    if (!this._webrtcConfig && !this._webrtcConfigPromise) this._fetchWebRTCConfig();
     if (!this._userHeartbeatInterval && this._hass.user) {
       this._sendUserHeartbeat();
       this._userHeartbeatInterval = setInterval(() => this._sendUserHeartbeat(), 20000);
@@ -40,6 +41,7 @@ export class CallSession extends CardController {
   connectedCallback() {
     super.connectedCallback();
     this._connectHA();
+    if (!this._mediaDevicesLoaded) this._refreshMediaDevices(false);
     this._timerInterval = setInterval(() => {
       for (const view of this.views) { this._viewHost = view; this._updateTimer(); }
     }, 1000);

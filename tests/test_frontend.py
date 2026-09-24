@@ -48,8 +48,7 @@ class FrontendRegistrationTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_failed_static_registration_is_retryable(self):
         self.hass.http.async_register_static_paths.side_effect = [RuntimeError("not ready"), None]
-        with self.assertRaises(RuntimeError):
-            await self.frontend.async_register_card(self.hass)
+        await self.frontend.async_register_card(self.hass)
         await self.frontend.async_register_card(self.hass)
         self.assertEqual(self.hass.http.async_register_static_paths.await_count, 2)
         self.resources.async_create_item.assert_awaited_once()

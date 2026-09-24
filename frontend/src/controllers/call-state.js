@@ -65,6 +65,7 @@ export function reconcileCall() {
           this._prevCallState = "idle";
         } else if (!(this._ignoredCallId && this._ignoredCallId === callId)) {
           this._currentCallId = callId;
+          this._currentCallType = activeCallType || this._currentCallType;
           this._currentRemoteNode = this._activeCallAttr("remote_node_id", "");
           this._isCaller = false;
           this._polite = true;
@@ -77,6 +78,7 @@ export function reconcileCall() {
       } else if (effectiveCallState === "active" && prev !== "active") {
         this._stopRingtone(); this._removePopup(); this._dismissBrowserNotification();
         this._currentCallId = callId;
+        this._currentCallType = activeCallType || this._currentCallType;
         this._currentRemoteNode = this._activeCallAttr("remote_node_id", "");
         if (activeSipBridgeId) this._sipBridgeId = activeSipBridgeId;
         this._isCaller = direction === "outgoing" || this._isCaller;
@@ -101,7 +103,7 @@ export function reconcileCall() {
       } else if (effectiveCallState === "idle" && prev !== "idle") {
         this._stopRingtone(); this._removePopup(); this._dismissBrowserNotification();
         this._cleanupWebRTC();
-        this._callStart = null; this._currentCallId = null;
+        this._callStart = null; this._currentCallId = null; this._currentCallType = "";
         this._currentRemoteNode = null; this._ignoredCallId = null;
         this._isCaller = false; this._outgoingIntentAt = 0;
         setTimeout(() => this._loadHistory(), 2000);

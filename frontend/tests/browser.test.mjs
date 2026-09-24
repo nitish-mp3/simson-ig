@@ -91,11 +91,12 @@ test('cold loads consistently, keeps input and audio DOM stable on HA updates',a
 
 test('dial routes and service failures are visible without throwing configuration errors',async()=>{
   const page=await browser.newPage();await load(page);
-  await page.locator('#node-input').fill('1040');await page.getByRole('button',{name:'Place call',exact:true}).click();
+  await page.locator('#node-input').fill('1040');await page.locator('button[aria-label="Place call"]').click();
   await page.waitForFunction(()=>window.calls.some(call=>call.service==='make_call'));
   assert.equal(await page.evaluate(()=>window.calls.find(call=>call.service==='make_call').data.target_id),'asterisk_1040');
+  await page.evaluate(()=>window.events.simson_call_status({data:{call_id:'first-call',status:'failed',direction:'outgoing',caller_user_id:'user1'}}));
   await page.evaluate(()=>{window.mockHass.callService=async()=>{throw Error('Gateway unavailable');};});
-  await page.waitForTimeout(700);await page.getByRole('button',{name:'Place call',exact:true}).click();
+  await page.waitForTimeout(700);await page.locator('button[aria-label="Place call"]').click();
   await page.getByRole('alert').filter({hasText:'Gateway unavailable'}).waitFor();
   await page.close();
 });
@@ -210,6 +211,7 @@ test('two browser nodes exchange audio and video and release devices after hangu
     for(const [index,peer] of window.peers.entries()) {
       peer._render=()=>{};
       peer._videoEnabled=true;peer._isCaller=index===0;peer._polite=index!==0;
+      peer._incomingCallType='video';
       peer._currentCallId='test-video';peer._currentRemoteNode=index===0?'studio':'office';
       peer._fetchWebRTCConfig=async()=>({ice_servers:[]});
       peer._sendWebRTCSignal=(signal_type,data)=>{

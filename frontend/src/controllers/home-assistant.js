@@ -59,6 +59,7 @@ _onHACallStatus(event) {
       (direction === "incoming" && (!target_user_id || target_user_id === myUserId)) ||
       (direction === "outgoing" && (!caller_user_id || caller_user_id === myUserId));
     if (!isMyEvent) return;
+    if (call_type) this._currentCallType = call_type;
     clearTimeout(this._outgoingUiTimer);
     this._outgoingUiTimer = null;
     if ((status === "requesting" || status === "ringing") && direction === "outgoing") {
@@ -82,6 +83,7 @@ _onHACallStatus(event) {
         this._removePopup();
         this._dismissBrowserNotification();
         this._currentCallId = null;
+        this._currentCallType = "";
         this._currentRemoteNode = null;
         this._sipBridgeId = null;
         this._callStart = null;
@@ -99,6 +101,7 @@ _onHACallStatus(event) {
         this._removePopup();
         this._dismissBrowserNotification();
         this._currentCallId = null;
+        this._currentCallType = "";
         this._currentRemoteNode = null;
         this._render();
         return;
@@ -140,6 +143,7 @@ _onHACallStatus(event) {
       this._cleanupWebRTC();
       this._callStart = null;
       this._currentCallId = null;
+      this._currentCallType = "";
       this._currentRemoteNode = null;
       this._isCaller = false;
       this._answeredByMe = false;
@@ -185,6 +189,7 @@ _onHAIncomingCall(event) {
       this._incomingCallTimeout = null;
     }
     this._currentCallId = call_id;
+    this._currentCallType = call_type || "voice";
     this._currentRemoteNode = from_node_id;
     this._incomingFrom = from_label || from_node_id;
     this._incomingCallType = call_type || "voice";
@@ -201,6 +206,7 @@ _onHAIncomingCall(event) {
         this._removePopup();
         this._dismissBrowserNotification();
         this._currentCallId = null;
+        this._currentCallType = "";
         this._currentRemoteNode = null;
         this._sipBridgeId = null;
         this._incomingCallTimeout = null;

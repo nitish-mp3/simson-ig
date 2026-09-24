@@ -4,13 +4,19 @@ export function callView(host, view) {
   const localVideo = Boolean(host._localStream?.getVideoTracks().length);
   const remoteVideo = Boolean(host._remoteStream?.getVideoTracks().length);
   const video = view.isActive && (localVideo || remoteVideo);
+  const isSipCall = view.activeCallType === 'sip' || host._currentCallType === 'sip';
+  const mediaConnected = isSipCall ? Boolean(host._sipUA?._activeBridge) : host._pc?.connectionState === 'connected';
+  const incomingVideo = ['video', 'webrtc-video'].includes(host._incomingCallType || view.activeCallType);
+  const mediaFailed = host._mediaDeviceError?.startsWith('The media connection failed.');
+  const statusText = view.isActive ? (mediaFailed ? 'Media connection failed' : mediaConnected ? 'Connected' : 'Connecting media…') : view.isIncoming ? (incomingVideo ? 'Incoming video call' : 'Would like to talk to you') : view.callId ? 'Ringing · Waiting for an answer…' : 'Sending your call request to the node…';
   const act = (key, action) => () => host._runAction(key, action);
   return html`<section class="call-workspace">
     <span class="eyebrow">${view.isActive ? 'LIVE CONVERSATION' : view.isIncoming ? 'INCOMING CALL' : view.callId ? 'CALLING' : 'STARTING YOUR CALL'}</span>
     ${video ? html`<div class="video-stage"><video id="remote-video" autoplay muted playsinline></video>${!remoteVideo ? html`<span class="video-wait">Waiting for their camera</span>` : nothing}${localVideo ? html`<video class="local-video" id="local-video" autoplay muted playsinline></video>` : nothing}<span class="live-label">LIVE</span></div>` : html`<div class="call-avatar">${String(view.remoteLabel).slice(0,2).toUpperCase()}</div>`}
-    <h2>${view.remoteLabel}</h2><p class="call-caption">${view.isActive ? 'Connected' : view.isIncoming ? 'Would like to talk to you' : view.callId ? 'Ringing · Waiting for an answer…' : 'Sending your call request to the node…'} <span id="call-timer"></span></p>
+    <h2>${view.remoteLabel}</h2><p class="call-caption">${statusText} <span id="call-timer"></span></p>
     ${!view.isActive && !view.isIncoming ? html`<div class="call-setup-status" role="status"><span class="call-setup-spinner"></span><span><b>${view.callId ? 'The destination is being called' : 'Connecting to your call service'}</b><small>${view.callId ? 'You can stay here while the other phone rings.' : 'This card will update as soon as the node responds.'}</small></span></div>` : nothing}
     ${host._micAllowed === false ? html`<div class="notice error">Microphone unavailable. Allow microphone access in your browser to speak.</div>` : nothing}
+    ${host._mediaDeviceError ? html`<div class="notice error" role="status">${host._mediaDeviceError}</div>` : nothing}
     <div class="call-actions">
       ${view.isIncoming ? html`<button class="primary" @click=${act('answer', () => host._answer())}>Answer</button><button class="danger" @click=${act('reject', () => host._reject())}>Decline</button>` : html`
         <button aria-pressed=${host._muted} ?disabled=${!view.isActive} @click=${act('mute', () => host._toggleMute())}>${host._muted ? 'Unmute' : 'Mute'}</button>

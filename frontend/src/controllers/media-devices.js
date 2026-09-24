@@ -53,15 +53,16 @@ _mediaConstraints(includeVideo = this._videoEnabled) {
         videoInputs: devices.filter(device => device.kind === "videoinput"),
         audioOutputs: devices.filter(device => device.kind === "audiooutput"),
       };
-      if (!this._mediaDevices.audioInputs.some(device => device.deviceId === this._selectedAudioInput)) {
-        this._selectedAudioInput = this._mediaDevices.audioInputs[0]?.deviceId || "";
+      if (this._mediaDevices.audioInputs.length && !this._mediaDevices.audioInputs.some(device => device.deviceId === this._selectedAudioInput)) {
+        this._selectedAudioInput = "";
       }
-      if (!this._mediaDevices.videoInputs.some(device => device.deviceId === this._selectedVideoInput)) {
-        this._selectedVideoInput = this._mediaDevices.videoInputs[0]?.deviceId || "";
+      if (this._mediaDevices.videoInputs.length && !this._mediaDevices.videoInputs.some(device => device.deviceId === this._selectedVideoInput)) {
+        this._selectedVideoInput = "";
       }
-      if (!this._mediaDevices.audioOutputs.some(device => device.deviceId === this._selectedAudioOutput)) {
-        this._selectedAudioOutput = this._mediaDevices.audioOutputs[0]?.deviceId || "";
+      if (this._mediaDevices.audioOutputs.length && !this._mediaDevices.audioOutputs.some(device => device.deviceId === this._selectedAudioOutput)) {
+        this._selectedAudioOutput = "";
       }
+      this._mediaDevicesLoaded = true;
       this._saveMediaPreferences();
     } catch (error) {
       this._mediaPermission = error?.name === "NotAllowedError" ? "denied" : "prompt";
@@ -72,18 +73,31 @@ _mediaConstraints(includeVideo = this._videoEnabled) {
     this._render();
   }
 
-async _captureMedia(includeVideo) {
+  async _captureMedia(includeVideo) {
     if (!navigator.mediaDevices?.getUserMedia) throw new Error('Use HTTPS and allow browser microphone access.');
     this._mediaDeviceError = '';
     try {
       return await navigator.mediaDevices.getUserMedia(this._mediaConstraints(includeVideo));
     } catch (error) {
+      if (["NotFoundError", "OverconstrainedError", "NotReadableError"].includes(error.name) &&
+          (this._selectedAudioInput || (includeVideo && this._selectedVideoInput))) {
+        this._selectedAudioInput = "";
+        this._selectedVideoInput = "";
+        this._saveMediaPreferences();
+        try {
+          const stream = await navigator.mediaDevices.getUserMedia(this._mediaConstraints(includeVideo));
+          this._mediaDeviceError = "A saved device is unavailable. Using the system default instead.";
+          return stream;
+        } catch (defaultError) {
+          error = defaultError;
+        }
+      }
       if (includeVideo) {
-        this._mediaDeviceError = 'Camera unavailable. Continuing with audio only.';
+        this._mediaDeviceError = 'Camera access is unavailable. Continuing with audio only.';
         try { return await navigator.mediaDevices.getUserMedia(this._mediaConstraints(false)); }
         catch (audioError) { error = audioError; }
       }
-      if (['NotFoundError', 'OverconstrainedError'].includes(error.name) && this._selectedAudioInput) {
+      if (["NotFoundError", "OverconstrainedError", "NotReadableError"].includes(error.name) && this._selectedAudioInput) {
         this._selectedAudioInput = '';
         this._saveMediaPreferences();
         return await navigator.mediaDevices.getUserMedia(this._mediaConstraints(false));
@@ -117,7 +131,7 @@ _stopMediaPreview(render = true) {
     if (render && this.isConnected) this._render();
   }
 
-_attachMediaElements() {
+  _attachMediaElements() {
     if (!this._remoteAudio.isConnected) this.shadowRoot.appendChild(this._remoteAudio);
     const preview = this._root()?.querySelector("#media-local-preview");
     if (preview && this._mediaPreviewStream && preview.srcObject !== this._mediaPreviewStream) {
@@ -134,8 +148,26 @@ _attachMediaElements() {
       localVideo.srcObject = this._localStream;
       localVideo.play().catch(() => {});
     }
-    if (this._remoteAudio?.setSinkId && this._remoteAudio.sinkId !== this._selectedAudioOutput) {
-      this._remoteAudio.setSinkId(this._selectedAudioOutput).catch(() => {});
+    this._applyAudioOutput();
+  }
+
+  async _applyAudioOutput() {
+    if (!this._remoteAudio?.setSinkId) {
+      if (!this._selectedAudioOutput) return;
+      this._selectedAudioOutput = "";
+      this._saveMediaPreferences();
+      this._mediaDeviceError = "This browser cannot select a speaker. Using its system default.";
+      this._render();
+      return;
+    }
+    if (this._remoteAudio.sinkId === this._selectedAudioOutput) return;
+    try {
+      await this._remoteAudio.setSinkId(this._selectedAudioOutput);
+    } catch (error) {
+      this._selectedAudioOutput = "";
+      this._saveMediaPreferences();
+      this._mediaDeviceError = "Could not select that speaker. Call audio is using the system default.";
+      this._render();
     }
   }
 };
