@@ -51,6 +51,7 @@ export class CallSession extends CardController {
     clearInterval(this._timerInterval);
     clearInterval(this._userHeartbeatInterval);
     clearTimeout(this._incomingCallTimeout);
+    clearTimeout(this._outgoingUiTimer);
     this._userHeartbeatInterval = null;
     this._unsubscribeHAEvents();
     navigator.mediaDevices?.removeEventListener?.('devicechange', this._deviceChangeHandler);

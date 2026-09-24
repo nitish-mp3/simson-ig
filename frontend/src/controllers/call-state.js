@@ -5,7 +5,7 @@ export function reconcileCall() {
     const callId = this._activeCallAttr("call_id", "") || this._currentCallId || "";
     const entityDirection = this._activeCallAttr("direction", "");
     const outgoingIntentActive = this._isCaller && this._outgoingIntentAt &&
-      (Date.now() - this._outgoingIntentAt < 15000);
+      (Date.now() - this._outgoingIntentAt < 45000);
     const direction = outgoingIntentActive ? "outgoing" : entityDirection;
 
     // Per-user call ownership: only show call UI to the intended caller or target.
@@ -22,7 +22,10 @@ export function reconcileCall() {
         (!answeredByUserId || answeredByUserId === myUserId)) ||
       (direction === "outgoing" && (!callerUserId || callerUserId === myUserId));
     const liveStates = ['incoming', 'requesting', 'ringing', 'active'];
-    const effectiveCallState = isMyCall && liveStates.includes(callState) && callId ? callState : 'idle';
+    const provisionalOutgoing = outgoingIntentActive && ['idle', 'unknown', 'unavailable'].includes(callState);
+    const effectiveCallState = isMyCall && ((liveStates.includes(callState) && callId) || provisionalOutgoing)
+      ? (provisionalOutgoing ? 'requesting' : callState)
+      : 'idle';
 
     const isIdle = effectiveCallState === "idle" || effectiveCallState === "unknown";
     const isIncoming = effectiveCallState === "incoming" && direction !== "outgoing" && !this._isCaller;
@@ -41,7 +44,7 @@ export function reconcileCall() {
                         this._activeCallAttr("remote_label") ||
                         this._activeCallAttr("remote_number") ||
                         this._activeCallAttr("remote_node_id") ||
-                        this._currentRemoteNode || (direction === "incoming" ? "Caller" : "Destination");
+                        String(this._currentRemoteNode || '').replace(/^phone:/, '') || (direction === "incoming" ? "Caller" : "Destination");
 
     if (callId && !this._currentCallId && isMyCall) this._currentCallId = callId;
     if (hasCall && !this._currentRemoteNode) {

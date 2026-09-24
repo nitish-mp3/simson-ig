@@ -571,3 +571,11 @@ footer span {
 .heading{min-width:0}
 .heading h1{overflow-wrap:anywhere}
 @media(max-width:420px){.header{flex-wrap:wrap;gap:12px}.status{margin-left:auto}}
+.call-setup-status{display:flex;align-items:center;gap:12px;max-width:440px;margin:20px auto 0;padding:13px 16px;text-align:left;border:1px solid var(--line);border-radius:12px;background:var(--panel)}
+.call-setup-status>span:last-child{display:grid;gap:2px}
+.call-setup-status b{font-size:13px}
+.call-setup-status small{color:var(--muted);font-size:12px;line-height:1.45}
+.call-setup-spinner{width:18px;height:18px;flex:none;border:2px solid var(--line);border-top-color:var(--accent);border-radius:50%;animation:call-spin .8s linear infinite}
+@keyframes call-spin{to{transform:rotate(360deg)}}
+.call-actions button:disabled{opacity:.62;cursor:wait}
+@media(max-width:520px){.call-setup-status{margin-top:14px;padding:11px 12px}.call-setup-status b{font-size:12px}}

@@ -7,6 +7,16 @@ _beginOutgoingCall(remoteNode) {
     this._answeredByMe = false;
     this._answerPendingCallId = null;
     this._outgoingIntentAt = Date.now();
+    this._actionError = '';
+    clearTimeout(this._outgoingUiTimer);
+    this._outgoingUiTimer = setTimeout(() => {
+      this._outgoingUiTimer = null;
+      if (!this._isCaller || this._currentCallId || !this._outgoingIntentAt) return;
+      this._outgoingIntentAt = 0;
+      this._isCaller = false;
+      this._actionError = 'No call status came back from the node. Check the gateway or SIP phone registration, then retry.';
+      this._render();
+    }, 45000);
     this._stopRingtone();
     this._removePopup();
     this._dismissBrowserNotification();
@@ -103,6 +113,8 @@ _looksLikePhoneNumber(value) {
   }
 
 _clearLocalCallState() {
+    clearTimeout(this._outgoingUiTimer);
+    this._outgoingUiTimer = null;
     this._callStart = null;
     this._currentCallId = null;
     this._currentRemoteNode = null;

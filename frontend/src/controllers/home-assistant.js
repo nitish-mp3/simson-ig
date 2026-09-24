@@ -59,7 +59,10 @@ _onHACallStatus(event) {
       (direction === "incoming" && (!target_user_id || target_user_id === myUserId)) ||
       (direction === "outgoing" && (!caller_user_id || caller_user_id === myUserId));
     if (!isMyEvent) return;
+    clearTimeout(this._outgoingUiTimer);
+    this._outgoingUiTimer = null;
     if ((status === "requesting" || status === "ringing") && direction === "outgoing") {
+      this._actionError = '';
       this._currentCallId = call_id || this._currentCallId;
       this._currentRemoteNode = remote_node_id || this._currentRemoteNode;
       this._isCaller = true;
@@ -70,6 +73,7 @@ _onHACallStatus(event) {
       this._dismissBrowserNotification();
       this._render();
     } else if (status === "active") {
+      this._actionError = '';
       console.log("[Simson] call_status active", { call_id, call_type, sip_bridge_id, direction, remote_node_id });
       const answeredLocally = this._answeredByMe || this._answerPendingCallId === call_id;
       if (direction === "incoming" && !answeredLocally) {
@@ -141,6 +145,7 @@ _onHACallStatus(event) {
       this._answeredByMe = false;
       this._answerPendingCallId = null;
       this._outgoingIntentAt = 0;
+      this._actionError = status === 'failed' ? 'The call could not be started. Check the selected gateway or SIP phone.' : '';
       // Refresh history after call ends.
       setTimeout(() => this._loadHistory(), 2000);
       this._render();
