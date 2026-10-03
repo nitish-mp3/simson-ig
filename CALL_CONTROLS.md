@@ -1,6 +1,6 @@
 # Call controls and privacy
 
-Requires integration 3.3.1, addon 5.1.7 and card 5.3.1. VPS fixes are version 1.6.9.
+Requires integration 3.3.2, addon 5.1.7 and card 5.3.2. VPS fixes are version 1.6.9.
 
 ## Gateway recovery
 
@@ -33,6 +33,34 @@ data:
 
 Local contacts appear directly in the dialer. Node selection remains available for another site. User browser calls require a browser/Companion app to answer; a SIP handset callback still uses `simson.make_call` with `source_extension`.
 
+Each contact also has a native `button` entity named `Call <user>`. Use `button.press` from a dashboard action, or invoke `simson.call_user` from a script with either the sensor or button entity. The authenticated user is the caller; a provided caller ID cannot override their identity. Self-calls, disabled users and busy participants return actionable errors. Concurrent contact calls on an integration entry are serialized before the addon request.
+
+Example script (replace the entity with the contact created on your HA instance):
+
+```yaml
+alias: Call reception
+mode: single
+sequence:
+  - action: simson.call_user
+    data:
+      entity_id: sensor.your_simson_user_contact
+      call_type: voice
+```
+
+A standard dashboard Button card can run that script using its normal tap action; the native `Call <user>` entity can also be selected directly in a Button card. Use the user card below if you want inline call controls rather than a script button plus popup.
+
+Interactive scripts open private calling controls on the caller's loaded Simson dashboard. Select **Use this browser for audio & video** (or audio) to join from that browser; this prevents other tabs/devices automatically opening microphones. Unattended scripts must provide `caller_user_id` and do not automatically join any browser. A dashboard must contain a Simson card for popup controls; scripts alone cannot inject UI into arbitrary HA pages.
+
+For a dedicated contact card with in-place controls:
+
+```yaml
+type: custom:simson-user-card
+entity: sensor.your_simson_user_contact
+title: Call the reception team
+```
+
+Its contact entity selects the node automatically. The editor offers the available users. A dial-only card also shows a current-call banner to reopen minimized controls, without requiring a separate live-call card.
+
 For notifications while the dashboard is closed, an administrator maps each contact to **that user's** Companion phone:
 
 ```yaml
@@ -44,6 +72,8 @@ data:
 ```
 
 Mappings persist in HA storage. Leave `notify_service` empty to disable. Answer/Decline opens the configured dashboard, where its Simson card performs an authenticated HA service action for that exact call. Ownership is checked server-side; no tokens are embedded in the link. The configured dashboard must contain a Simson card for that node. Targeted calls no longer create a global persistent notification visible to unrelated users. Without a mapped phone, an incoming call is available in that user's card while it is ringing, but cannot wake a closed browser.
+
+The contact's `notification` attribute and `simson_user_notification_status` event expose the last call ID, service, status and error. `sent` means the HA notify service accepted the request, **not** that a phone received it. Incoming notifications are deduplicated; sending and clearing are ordered, and late invites cannot resurrect an already-cleared notification. Failed sends remain retryable on a repeated incoming event. Tests use mocked notify services and browser media; physical push delivery still needs validation on each configured phone. Companion platforms can limit notification clearing depending on app activity; see [notification limitations](https://companion.home-assistant.io/docs/notifications/notifications-basic/).
 
 Cards do not automatically join existing SIP/gateway calls on dashboard load. Browser media requires a local dialing action, an explicit answer, or an authenticated notification-answer handoff. Diagnostic HA entities are not per-user secrets: Home Assistant's shared state remains visible to users with HA state access. The underlying shared browser SIP credential is a remaining architectural limitation, not a per-user security boundary.
 

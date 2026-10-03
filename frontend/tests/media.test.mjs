@@ -35,6 +35,8 @@ test('answer waits for authorization and rejects media on a denied answer', asyn
   const host=new (withCallActions(Base))();
   let resolveAnswer,mediaStarts=0;
   host._activeCallAttr=()=> 'incoming';
+  host._callState=()=> 'incoming';
+  host._showIncomingPopup=()=>{};
   host._sipBridgeId='bridge';
   host._stopRingtone=host._removePopup=host._dismissBrowserNotification=()=>{};
   host._callService=()=>new Promise(resolve=>resolveAnswer=resolve);
@@ -47,6 +49,23 @@ test('answer waits for authorization and rejects media on a denied answer', asyn
   const accepted=host._answer();
   resolveAnswer(undefined);await accepted;
   assert.equal(mediaStarts,1);
+});
+
+test('decline keeps failed actions retryable and clears accepted call snapshots',async()=>{
+  const host=new (withCallActions(Base))();
+  host._currentCallId='incoming';host._eventCallSnapshot={call_id:'incoming',state:'incoming'};
+  host._activeCallAttr=()=> 'incoming';
+  host._stopRingtone=host._removePopup=host._dismissBrowserNotification=()=>{};
+  host._callService=async()=>false;
+  await host._reject();
+  assert.equal(host._currentCallId,'incoming');
+  assert.ok(host._eventCallSnapshot);
+  host._callService=async()=>undefined;
+  await host._reject();
+  assert.equal(host._currentCallId,null);
+  assert.equal(host._eventCallSnapshot,null);
+  assert.ok(host._endedCallIds.has('incoming'));
+  assert.ok(!host._incomingSuppressUntil);
 });
 test('camera failure retries microphone and late preview cancellation releases tracks',async()=>{
   const original=globalThis.navigator;
@@ -96,7 +115,7 @@ test('all delayed subscriptions unsubscribe after the card disconnects',async()=
   host._hass={connection:{subscribeEvents:()=>new Promise(resolve=>pending.push(resolve))}};
   host._subscribeHAEvents();host.isConnected=false;host._unsubscribeHAEvents();
   pending.forEach(resolve=>resolve(()=>unsubscribed++));await Promise.resolve();
-  assert.equal(unsubscribed,6);assert.equal(host._subscriptions.length,0);
+  assert.equal(unsubscribed,7);assert.equal(host._subscriptions.length,0);
 });
 
 test('numeric extensions and node IDs containing numbers use different routes',()=>{

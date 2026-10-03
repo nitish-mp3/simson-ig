@@ -102,7 +102,8 @@ class SimsonUserContactSensor(SimsonBaseSensor):
             return "unavailable"
         calls = (self.coordinator.data or {}).get("calls_data", {}).get("calls", [])
         active = next((call for call in calls if call.get("state") in ("requesting", "ringing", "incoming", "active")
-            and self._user_id in (call.get("caller_user_id"), call.get("target_user_id"), call.get("answered_by_user_id"))), None)
+            and self._user_id in tuple(call.get(key) or (call.get("metadata") or {}).get(key)
+                for key in ("caller_user_id", "target_user_id", "answered_by_user_id"))), None)
         return active["state"] if active else "ready"
 
     @property
@@ -112,7 +113,9 @@ class SimsonUserContactSensor(SimsonBaseSensor):
         return {"simson_contact": True, "contact_id": self._contact_id, "user_id": self._user_id,
             "entry_id": self._entry.entry_id,
             "node_id": (self.coordinator.data or {}).get("node_id", ""),
-            "user_name": user.get("user_name", self._attr_name)}
+            "user_name": user.get("user_name", self._attr_name),
+            "notification": self.hass.data.get(DOMAIN, {}).get(self._entry.entry_id, {})
+                .get("user_notification_status", {}).get(self._user_id, {}) if self.hass else {}}
 
 
 class SimsonConnectionSensor(SimsonBaseSensor):

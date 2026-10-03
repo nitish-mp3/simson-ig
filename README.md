@@ -8,7 +8,7 @@ Custom integration that pairs with the **Simson addon** to expose call state sen
 1. Install/download the Simson Call Relay integration.
 2. Restart Home Assistant.
 3. Go to **Settings -> Devices & Services -> Add Integration -> Simson Call Relay**.
-4. Enter the addon API URL, usually `http://localhost:8099` when the addon runs on the same HAOS instance.
+4. Enter the addon API URL, usually `http://localhost:8799` when the addon runs on the same HAOS instance.
 5. Finish setup and refresh the browser once.
 
 Important: seeing **Simson Call Relay** under **Downloaded** only means the files are installed. The Lovelace card is registered only after the integration is added under **Devices & Services**.
@@ -20,12 +20,18 @@ Important: seeing **Simson Call Relay** under **Downloaded** only means the file
 | `sensor.simson_<node>_connection` | Sensor | VPS connection status (`connected` / `disconnected`) |
 | `sensor.simson_<node>_call_state` | Sensor | Current call state (`idle`, `ringing`, `incoming`, `active`) |
 | `sensor.simson_<node>_calls_count` | Sensor | Total tracked calls count |
+| User contact | Sensor | Stable per-user identity, readiness and notification diagnostics |
+| `Call <user>` | Button | Start a private call as the authenticated user |
+
+See [call controls and user notification setup](CALL_CONTROLS.md) for scripts, per-user cards, Companion app mapping and deployment requirements.
 
 ## Services
 
 | Service | Description | Parameters |
 |---------|-------------|------------|
 | `simson.make_call` | Initiate a call | `target_node_id` or `target_id`; for outside calls use `phone_number` plus optional `trunk` such as `7009` |
+| `simson.call_user` | Call a local user contact with busy checks and private script popup | `entity_id`, optional `call_type`; unattended scripts require `caller_user_id` |
+| `simson.set_user_notification_target` | Administrator maps a contact to their phone | `entity_id`, `notify_service`, `dashboard_path` |
 | `simson.answer_call` | Answer an incoming call | `call_id` (required) |
 | `simson.reject_call` | Reject an incoming call | `call_id` (required), `reason` (optional) |
 | `simson.hangup_call` | End an active call | `call_id` (required) |
@@ -55,7 +61,7 @@ If the card picker still only shows **Manual**, the frontend has not loaded the 
 2. Add this resource:
 
 ```
-URL: /simson/www/simson-card.js?v=5.0.0
+URL: /simson/www/simson-card.js?v=5.3.2
 Type: JavaScript Module
 ```
 

@@ -61,6 +61,22 @@ _bindAction(el, key, fn, minMs = 650) {
     el.addEventListener("click", handler);
   }
 
+_callUserEntity(entityId) {
+    const user = this._hass?.states?.[entityId];
+    if (!user?.attributes?.simson_contact) return;
+    this._beginOutgoingCall(user.attributes.node_id, this._videoEnabled ? 'video' : 'voice', user.attributes.user_name || 'User');
+    return this._callService('call_user', {entity_id:entityId,call_type:this._videoEnabled ? 'video' : 'voice'});
+  }
+
+_joinUserCall() {
+    if (!this._currentCallId || !this._isCaller) return;
+    this._initiatedHere = true;
+    this._videoEnabled = this._currentCallType === 'video';
+    const start = this._callState() === 'active' ? this._startWebRTC() : undefined;
+    this._render();
+    return start;
+  }
+
 _dial(nodeId, targetUserId, targetUserName) {
     if (!nodeId) return;
     const callType = this._videoEnabled ? "video" : "voice";
@@ -120,6 +136,7 @@ _looksLikePhoneNumber(value) {
 
 _clearLocalCallState() {
     this._initiatedHere = false;
+    this._showCallDialog = false;
     if (this._currentCallId) (this._endedCallIds ||= new Set()).add(this._currentCallId);
     this._eventCallSnapshot = null;
     clearTimeout(this._outgoingUiTimer);
@@ -162,45 +179,36 @@ async _answer(callId = this._activeCallAttr("call_id") || this._currentCallId) {
       this._answerPendingCallId = null;
       this._answeredByMe = false;
       this._callStart = null;
+      if (this._callState() === 'incoming') this._showIncomingPopup();
       this._render();
       return;
     }
     this._answeredByMe = true;
+    this._showCallDialog = true;
+    this._render();
     // If Asterisk ConfBridge bridge ID is known, join via SIP UA
     if (this._sipBridgeId) {
       this._startSIPCall(this._sipBridgeId).catch(e => console.error("[Simson] SIP answer start:", e));
     }
   }
 
-_reject() {
+async _reject() {
     const callId = this._activeCallAttr("call_id") || this._currentCallId;
+    if (!callId) return;
     // Clear incoming timeout since call is being rejected.
     if (this._incomingCallTimeout) {
       clearTimeout(this._incomingCallTimeout);
       this._incomingCallTimeout = null;
     }
-    // Fire-and-forget — don't wait for server. If the call already timed out,
-    // this will fail silently, but the UI clears immediately regardless.
-    this._callService("reject_call", { call_id: callId, reason: "declined" }).catch(() => {});
-    // Clear all local call state right now, before the server responds.
+    const result = await this._callService("reject_call", { call_id: callId, reason: "declined" });
+    if (this._currentCallId && this._currentCallId !== callId) return;
+    if (result === false) {this._render();return;}
     this._stopRingtone();
     this._removePopup();
     this._dismissBrowserNotification();
     this._ignoredCallId = callId;
-    this._currentCallId = null;
-    this._currentCallType = "";
-    this._currentRemoteNode = null;
-    this._sipBridgeId = null;
-    this._isCaller = false;
-    this._callStart = null;
-    this._answeredByMe = false;
-    this._answerPendingCallId = null;
-    this._outgoingIntentAt = 0;
-    this._prevCallState = "idle"; // reset transition tracking
-    // Suppress any new incoming call popup for 8 s so the phone spam
-    // doesn't immediately re-open the popup after the user dismisses it.
-    this._incomingSuppressUntil = Date.now() + 8000;
-    this._render();
+    if (!this._currentCallId) this._currentCallId = callId;
+    this._clearLocalCallState();
   }
 
 _hangup() {

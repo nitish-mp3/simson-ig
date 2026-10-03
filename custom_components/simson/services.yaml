@@ -328,7 +328,7 @@ clear_stuck_calls:
 
 call_user:
   name: Call a User
-  description: Call a user through their stable Simson contact entity. Dashboard presence is not required to select them.
+  description: Call a user through their stable contact sensor or call button. Interactive scripts open calling controls on the caller's Simson dashboard.
   fields:
     entity_id:
       name: User contact
@@ -336,7 +336,9 @@ call_user:
       selector:
         entity:
           integration: simson
-          domain: sensor
+          domain:
+            - sensor
+            - button
     call_type:
       default: voice
       selector:

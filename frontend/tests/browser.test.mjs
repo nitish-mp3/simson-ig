@@ -234,6 +234,51 @@ test('Mauritius card dialing preserves +230 and the explicitly selected 6202 tru
   await page.close();
 });
 
+test('user-script popup is private, immediate and requires explicit browser media intent',async()=>{
+  const page=await browser.newPage({viewport:{width:390,height:844}});await load(page);
+  const event={node_id:'office',call_id:'script-call',caller_user_id:'user1',target_user_id:'user2',target_user_name:'Recipient',call_type:'video',interactive:true};
+  await page.evaluate(event=>{
+    const host=document.querySelector('simson-relay-card')._card.session;
+    window.mediaStarts=0;host._startWebRTC=()=>{window.mediaStarts++;return Promise.resolve();};
+    window.events.simson_user_call_started({data:{...event,caller_user_id:'observer'}});
+  },event);
+  assert.equal(await page.getByRole('dialog').count(),0);
+  await page.evaluate(event=>window.events.simson_user_call_started({data:event}),event);
+  await page.getByRole('dialog',{name:'Your call'}).waitFor({timeout:500});
+  await page.getByRole('button',{name:'Use this browser for audio & video'}).waitFor();
+  const bounds=await page.getByRole('dialog').locator('.call-dialog').boundingBox();
+  assert.ok(bounds.y>=0 && bounds.y+bounds.height<=844 && bounds.x>=0 && bounds.x+bounds.width<=390);
+  await page.getByRole('dialog').getByRole('button',{name:'Minimize'}).waitFor();
+  await page.evaluate(()=>window.events.simson_call_status({data:{node_id:'office',call_id:'script-call',status:'active',direction:'outgoing',caller_user_id:'user1',target_user_id:'user2',call_type:'video'}}));
+  assert.equal(await page.evaluate(()=>window.mediaStarts),0);
+  await page.getByRole('button',{name:'Use this browser for audio & video'}).click();
+  assert.equal(await page.evaluate(()=>window.mediaStarts),1);
+  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth),true);
+  await page.screenshot({path:path.join(integrationRoot,'frontend/test-results/user-call-popup-mobile.png'),fullPage:true});
+  await page.waitForTimeout(700);
+  await page.getByRole('dialog').getByRole('button',{name:'End call'}).click();
+  await page.waitForFunction(()=>!document.querySelector('simson-relay-card')._card.session._view.hasCall);
+  assert.equal(await page.getByRole('dialog').count(),0);
+  assert.ok(await page.evaluate(()=>window.calls.some(call=>call.service==='hangup_call'&&call.data.call_id==='script-call')));
+  await page.close();
+});
+
+test('per-user card detects its node, opens immediate controls and does not duplicate buttons as contacts',async()=>{
+  const page=await browser.newPage({viewport:{width:390,height:844}});await load(page);
+  await page.evaluate(()=>{
+    window.mockHass.states['sensor.recipient']={state:'ready',attributes:{simson_contact:true,node_id:'office',user_id:'user2',user_name:'Recipient'}};
+    window.mockHass.states['button.recipient']={state:'unknown',attributes:{simson_contact:true,simson_call_button:true,node_id:'office',user_id:'user2'}};
+    const shell=document.createElement('simson-user-card');shell.setConfig({entity:'sensor.recipient'});shell.hass=window.mockHass;
+    document.querySelector('#mount').replaceChildren(shell);
+  });
+  await page.getByRole('button',{name:'Call Recipient',exact:true}).waitFor();
+  await page.getByRole('button',{name:'Call Recipient',exact:true}).click();
+  await page.getByText('Connecting to your call service',{exact:true}).waitFor({timeout:500});
+  assert.deepEqual(await page.evaluate(()=>window.calls.find(call=>call.service==='call_user').data),{entity_id:'sensor.recipient',call_type:'voice'});
+  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth),true);
+  await page.close();
+});
+
 test('notification handoff invokes the exact authenticated call action once',async()=>{
   for(const action of ['answer','decline']) {
     const page=await browser.newPage();await load(page);

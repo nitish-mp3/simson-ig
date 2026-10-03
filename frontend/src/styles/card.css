@@ -532,14 +532,22 @@ footer span {
   position: relative;
 }
 .dialog-scrim {
-  position: absolute;
+  position: fixed;
   inset: 0;
-  z-index: 10;
+  margin: 0;
+  width: 100vw;
+  height: 100dvh;
+  max-width: none;
+  max-height: none;
+  border: 0;
+  color: var(--ink);
   display: grid;
   place-items: center;
-  padding: 20px;
+  padding: 16px;
   background: #080d17e8;
 }
+.dialog-scrim:not([open]){display:none}
+.dialog-scrim::backdrop{background:#080d17b3}
 .dialog {
   width: 100%;
   max-width: 380px;
@@ -548,6 +556,8 @@ footer span {
   border: 1px solid var(--line);
   border-radius: 20px;
   box-shadow: 0 20px 60px #0006;
+  max-height: calc(100dvh - 32px);
+  overflow: auto;
 }
 .dialog h2 {
   overflow-wrap: anywhere;
@@ -577,5 +587,21 @@ footer span {
 .call-setup-status small{color:var(--muted);font-size:12px;line-height:1.45}
 .call-setup-spinner{width:18px;height:18px;flex:none;border:2px solid var(--line);border-top-color:var(--accent);border-radius:50%;animation:call-spin .8s linear infinite}
 @keyframes call-spin{to{transform:rotate(360deg)}}
+.user-workspace{display:grid;gap:20px;padding:20px 0}
+.user-profile{display:grid;justify-items:center;gap:14px;text-align:center;min-width:0}
+.user-profile h2{margin:0;overflow-wrap:anywhere}
+.user-presence{font-size:13px;border:1px solid var(--line);border-radius:24px;padding:8px 14px;color:var(--muted)}
+.user-presence.ready{color:var(--accent)}
+.user-actions{display:grid;gap:14px}
+.current-call-banner{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:14px;margin:14px 0}
+.current-call-banner>span{display:grid;gap:4px;min-width:0;overflow-wrap:anywhere}
+.current-call-banner small{color:var(--muted)}
+.user-actions>button{white-space:normal;overflow-wrap:anywhere;min-height:48px}
+.dialog-heading{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.call-dialog{width:min(100%,560px);max-width:560px}
+.call-dialog .call-workspace{padding-top:16px}
+.browser-join{display:grid;gap:12px;padding:16px;border:1px solid var(--line);border-radius:14px;background:var(--panel);text-align:left;margin-top:18px}
+.browser-join p{margin:0;font-size:13px;line-height:1.6;color:var(--muted)}
+@media(prefers-reduced-motion:reduce){.call-setup-spinner{animation:none}}
 .call-actions button:disabled{opacity:.62;cursor:wait}
 @media(max-width:520px){.call-setup-status{margin-top:14px;padding:11px 12px}.call-setup-status b{font-size:12px}}

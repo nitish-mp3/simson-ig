@@ -1,8 +1,9 @@
 import importlib.util
+import asyncio
 import sys
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 from urllib.parse import urlsplit, parse_qs
 
 import pytest
@@ -57,9 +58,9 @@ async def test_notifications_only_reach_the_mapped_user_on_the_matching_node(mon
         return lambda: None
     services = SimpleNamespace(has_service=lambda *args: True, async_call=AsyncMock())
     hass = SimpleNamespace(data={"simson": {"entry": {}}}, services=services,
-        bus=SimpleNamespace(async_listen=listen))
+        bus=SimpleNamespace(async_listen=listen, async_fire=Mock()))
     entry = SimpleNamespace(entry_id="entry", async_on_unload=lambda callback: None)
-    coordinator = SimpleNamespace(data={"node_id": "office"})
+    coordinator = SimpleNamespace(data={"node_id": "office"}, async_update_listeners=Mock())
     await module.async_setup_user_notifications(hass, entry, coordinator)
     incoming = {"node_id": "office", "call_id": "one", "target_user_id": "recipient", "from_label": "Caller"}
     await listeners["simson_incoming_call"](SimpleNamespace(event_type="simson_incoming_call", data=incoming))
@@ -71,3 +72,44 @@ async def test_notifications_only_reach_the_mapped_user_on_the_matching_node(mon
     await listeners["simson_call_status"](SimpleNamespace(event_type="simson_call_status", data={**incoming, "status": "ended"}))
     assert services.async_call.await_args.args[2]["message"] == "clear_notification"
     assert services.async_call.await_count == 2
+    await listeners["simson_incoming_call"](SimpleNamespace(event_type="simson_incoming_call", data=incoming))
+    assert services.async_call.await_count == 2
+    assert hass.data["simson"]["entry"]["user_notification_status"]["recipient"]["status"] == "cleared"
+
+    release = asyncio.Event()
+    async def slow_send(*args, **kwargs):
+        if args[2]["message"] != "clear_notification":
+            await release.wait()
+    services.async_call.side_effect = slow_send
+    second = {**incoming, "call_id": "two"}
+    send = asyncio.create_task(listeners["simson_incoming_call"](SimpleNamespace(event_type="simson_incoming_call", data=second)))
+    await asyncio.sleep(0)
+    clear = asyncio.create_task(listeners["simson_call_status"](SimpleNamespace(event_type="simson_call_status", data={"node_id": "office", "call_id": "two", "status": "active"})))
+    await asyncio.sleep(0)
+    assert not clear.done()
+    release.set()
+    await asyncio.gather(send, clear)
+    assert services.async_call.await_args.args[2]["message"] == "clear_notification"
+    assert hass.data["simson"]["entry"]["user_notification_status"]["recipient"]["status"] == "cleared"
+
+    services.async_call.side_effect = RuntimeError("notify unavailable")
+    third = {**incoming, "call_id": "three"}
+    await listeners["simson_incoming_call"](SimpleNamespace(event_type="simson_incoming_call", data=third))
+    diagnostics = hass.data["simson"]["entry"]["user_notification_status"]["recipient"]
+    assert diagnostics["status"] == "failed"
+    assert diagnostics["error"] == "notify unavailable"
+    services.async_call.side_effect = None
+    await listeners["simson_incoming_call"](SimpleNamespace(event_type="simson_incoming_call", data=third))
+    assert hass.data["simson"]["entry"]["user_notification_status"]["recipient"]["status"] == "sent"
+    previous_count = services.async_call.await_count
+    await listeners["simson_incoming_call"](SimpleNamespace(event_type="simson_incoming_call", data=third))
+    assert services.async_call.await_count == previous_count
+    terminal_first = {**incoming, "call_id": "four", "status": "ended"}
+    await listeners["simson_call_status"](SimpleNamespace(event_type="simson_call_status", data=terminal_first))
+    previous_count = services.async_call.await_count
+    await listeners["simson_incoming_call"](SimpleNamespace(event_type="simson_incoming_call", data=terminal_first))
+    assert services.async_call.await_count == previous_count
+    unmapped = {**incoming, "call_id": "five", "target_user_id": "not_mapped"}
+    await listeners["simson_incoming_call"](SimpleNamespace(event_type="simson_incoming_call", data=unmapped))
+    assert services.async_call.await_count == previous_count
+    assert hass.data["simson"]["entry"]["user_notification_status"]["not_mapped"]["status"] == "not_configured"

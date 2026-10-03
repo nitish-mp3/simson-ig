@@ -9,7 +9,7 @@ CONF_ADDON_URL = "addon_url"
 DEFAULT_ADDON_URL = "http://localhost:8799"
 
 # Platforms
-PLATFORMS = ["sensor"]
+PLATFORMS = ["sensor", "button"]
 
 # Events
 EVENT_INCOMING_CALL = "simson_incoming_call"

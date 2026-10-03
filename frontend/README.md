@@ -5,11 +5,11 @@ Edit `src/`, not `www/`. The root `www/simson-call-card.js` and integration-serv
 
 ## Structure
 
-- `entry.js`: immediately registers all three supported custom-card names. No HA
+- `entry.js`: immediately registers all supported custom-card aliases. No HA
   connection, addon API, SIP library, or device permissions are needed to register.
 - `card.js`: Lit lifecycle, selective HA updates, and the main card composition.
 - `card-base.js`: configuration compatibility and initial session state.
-- `views/`: dial, active call, history, devices, and recipient dialog templates.
+- `views/`: dial, active call, history, devices, per-user/door cards and recipient dialogs.
 - `controllers/`: HA events, actions, call state, media devices, WebRTC, SIP bridge,
   and notifications. They compose the card without replacing the DOM on updates.
 - `transport/`: lazy-loaded SIP client and ICE defaults.
@@ -44,7 +44,7 @@ Update `src/version.js`, integration `frontend.py`, and `manifest.json` together
 Run the build and checks, then include generated assets in the release commit.
 The integration migrates its known legacy resource URLs and removes duplicate
 Simson resource entries, while preserving other cards. YAML-managed dashboards
-must use `/simson/www/simson-card.js?v=5.0.0` as a JavaScript module resource.
+must use `/simson/www/simson-card.js?v=5.3.2` as a JavaScript module resource.
 
 The call protocol and gateway routes retain their existing API contract. The
 addon Media Studio preview and the dashboard card store separate browser device

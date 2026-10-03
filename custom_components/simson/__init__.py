@@ -21,6 +21,7 @@ from aiohttp import web
 from .api import SimsonApiClient
 from .call_access import can_control_call
 from .user_notifications import async_setup_user_notifications
+from .user_calls import start_user_call
 from .frontend import async_register_card as _async_register_card
 from .const import (
     DOMAIN,
@@ -79,7 +80,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         }
 
         await hass.config_entries.async_forward_entry_setups(
-            entry, [Platform.SENSOR]
+            entry, [Platform.SENSOR, Platform.BUTTON]
         )
 
         # Register services and live event sync.
@@ -324,18 +325,8 @@ def _register_services(hass: HomeAssistant, client: SimsonApiClient) -> None:
             schema=vol.Schema({vol.Required("endpoint_id"): vol.All(str, vol.Length(min=1, max=128))}))
 
     async def handle_call_user(call: ServiceCall) -> None:
-        entity = hass.states.get(call.data["entity_id"])
-        if not entity or not entity.attributes.get("simson_contact"):
-            raise HomeAssistantError("Choose a Simson user contact entity")
-        user_id = entity.attributes.get("user_id")
-        user = await hass.auth.async_get_user(user_id)
-        if not user or not user.is_active or user.system_generated:
-            raise HomeAssistantError("The selected user is no longer available")
         try:
-            result = await client.make_call(target_node_id=entity.attributes["node_id"],
-                target_user_id=user_id, target_user_name=user.name or "User",
-                caller_user_id=call.context.user_id or call.data.get("caller_user_id", ""),
-                call_type=call.data.get("call_type", "voice"))
+            result = await start_user_call(hass, call)
             fire_service_result("call_user", result)
             refresh_all_entries()
         except Exception as err:

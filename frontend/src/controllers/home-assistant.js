@@ -25,6 +25,7 @@ _subscribeHAEvents() {
       ['simson_webrtc_signal', '_onHAWebRTCSignal'], ['simson_call_status', '_onHACallStatus'],
       ['simson_incoming_call', '_onHAIncomingCall'], ['simson_targets_result', '_onHATargetsResult'],
       ['simson_remote_users', '_onHARemoteUsers'], ['simson_call_history', '_onHACallHistory'],
+      ['simson_user_call_started', '_onHAUserCallStarted'],
     ];
     this._subscriptions = [];
     for (const [event, method] of events) {
@@ -46,6 +47,25 @@ _unsubscribeHAEvents() {
     this._haEventSubscribed = false;
   }
 
+_onHAUserCallStarted(event) {
+    if (!event.interactive || event.node_id !== this._nodeId() || !event.call_id ||
+        event.caller_user_id !== this._hass?.user?.id || this._endedCallIds?.has(event.call_id)) return;
+    if (this._currentCallId && this._currentCallId !== event.call_id) return;
+    const initiatedLocally = Boolean(this._initiatedHere);
+    if (!this._currentCallId) this._beginOutgoingCall(event.node_id, event.call_type, event.target_user_name);
+    this._initiatedHere = initiatedLocally;
+    this._currentCallId = event.call_id;
+    this._currentRemoteNode = event.node_id;
+    this._currentRemoteLabel = event.target_user_name;
+    this._currentCallType = event.call_type || 'voice';
+    this._isCaller = true;
+    clearTimeout(this._outgoingUiTimer);
+    this._eventCallSnapshot = {...event, ...this._eventCallSnapshot, call_id:event.call_id,
+      direction:'outgoing', state:this._eventCallSnapshot?.state || 'requesting'};
+    if (!initiatedLocally) this._showCallDialog = true;
+    this._render();
+  }
+
 _onHAWebRTCSignal(event) {
     this._handleWebRTCSignal(event).catch(error => {
       this._actionError = error?.message || 'The media connection could not be established.';
@@ -61,6 +81,7 @@ _onHACallStatus(event) {
     const myUserId = this._hass?.user?.id || "";
     const isMyEvent = ownsCall(event, myUserId, this._currentCallId);
     if (!isMyEvent) return;
+    if (this._currentCallId && call_id !== this._currentCallId) return;
     if (['requesting','ringing','active'].includes(status)) {
       this._eventCallSnapshot = {...this._eventCallSnapshot, ...event, state: status};
     }
@@ -160,6 +181,7 @@ _onHACallStatus(event) {
       this._answerPendingCallId = null;
       this._outgoingIntentAt = 0;
       this._initiatedHere = false;
+      this._showCallDialog = false;
       this._actionError = status === 'failed' ? 'The call could not be started. Check the selected gateway or SIP phone.' : '';
       // Refresh history after call ends.
       setTimeout(() => this._loadHistory(), 2000);
@@ -188,7 +210,8 @@ _onHAIncomingCall(event) {
       return;
     }
     // DEDUPLICATE: Ignore calls from same extension within 2s (prevents spam from phone retrying)
-    const callKey = from_node_id + "|" + call_type;
+    if (!call_id || this._endedCallIds?.has(call_id)) return;
+    const callKey = call_id;
     if (this._lastIncomingCall === callKey && Date.now() - this._lastIncomingCallTime < 2000) {
       console.log("[Simson] Ignoring duplicate incoming call from", from_node_id, "within 2s");
       return;
@@ -214,15 +237,12 @@ _onHAIncomingCall(event) {
     this._showBrowserNotification(this._incomingFrom, this._incomingCallType);
     // Auto-clear phantom incoming calls after 30 seconds if no answer/reject.
     this._incomingCallTimeout = setTimeout(() => {
-      if (this._currentCallId === call_id) {
+      if (this._currentCallId === call_id && !this._answeredByMe && !this._answerPendingCallId && this._callState() !== 'active') {
         console.log("[Simson] Incoming call timeout - clearing phantom call", call_id);
         this._stopRingtone();
         this._removePopup();
         this._dismissBrowserNotification();
-        this._currentCallId = null;
-        this._currentCallType = "";
-        this._currentRemoteNode = null;
-        this._sipBridgeId = null;
+        this._clearLocalCallState();
         this._incomingCallTimeout = null;
         this._render();
       }
@@ -334,7 +354,7 @@ async _callService(service, data = {}) {
       await this._hass.callService("simson", service, data);
       setTimeout(() => this._render(), 250);
     } catch (err) {
-      if (service === "make_call" || service === "call_sip_phone" || service === "call_phone_number") {
+      if (service === "make_call" || service === "call_user" || service === "call_sip_phone" || service === "call_phone_number") {
         this._clearLocalCallState();
       }
       this._actionError = err?.message || 'Could not reach Simson. Please retry.';
