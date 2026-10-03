@@ -33,6 +33,32 @@ _mediaConstraints(includeVideo = this._videoEnabled) {
     return { audio, video };
   }
 
+async _enableCamera() {
+    const peer = this._pc;
+    if (!peer || this._localStream?.getVideoTracks().length || this._enablingCamera) return;
+    this._enablingCamera = true;
+    let stream;
+    try {
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({audio:false,video:this._mediaConstraints(true).video});
+      } catch (error) {
+        if (!['NotFoundError','OverconstrainedError'].includes(error.name)) throw error;
+        stream = await navigator.mediaDevices.getUserMedia({audio:false,video:true});
+      }
+      if (this._pc !== peer || !this.isConnected) { stream.getTracks().forEach(track=>track.stop()); return; }
+      this._localStream ||= new MediaStream();
+      stream.getVideoTracks().forEach(track=>{this._localStream.addTrack(track);peer.addTrack(track,this._localStream);});
+      this._cameraMuted = false;
+      this._mediaDeviceError = '';
+    } catch (error) {
+      stream?.getTracks().forEach(track=>track.stop());
+      this._mediaDeviceError = error.message || 'Camera unavailable. Audio continues.';
+    } finally {
+      this._enablingCamera = false;
+      this._render();
+    }
+  }
+
   async _refreshMediaDevices(requestPermission = false) {
     if (!navigator.mediaDevices?.enumerateDevices) return;
     let probe = null;

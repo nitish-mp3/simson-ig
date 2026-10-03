@@ -1,3 +1,5 @@
+import { ownsCall } from '../state/call-ownership.js';
+
 export const withHomeAssistant = Base => class extends Base {
 _autoDetectNodeId() {
     if (!this._hass?.states) return;
@@ -52,13 +54,16 @@ _onHAWebRTCSignal(event) {
   }
 
 _onHACallStatus(event) {
+    if (event.node_id && event.node_id !== this._nodeId()) return;
+    if (event.local_user_call && event.caller_user_id === this._hass?.user?.id) event = {...event, direction: 'outgoing'};
     const { call_id, status, direction, remote_node_id, call_type, sip_bridge_id, target_user_id, caller_user_id, answered_by_user_id } = event;
     // Only react to events that belong to this session's user.
     const myUserId = this._hass?.user?.id || "";
-    const isMyEvent = call_id === this._currentCallId ||
-      (direction === "incoming" && (!target_user_id || target_user_id === myUserId)) ||
-      (direction === "outgoing" && (!caller_user_id || caller_user_id === myUserId));
+    const isMyEvent = ownsCall(event, myUserId, this._currentCallId);
     if (!isMyEvent) return;
+    if (['requesting','ringing','active'].includes(status)) {
+      this._eventCallSnapshot = {...this._eventCallSnapshot, ...event, state: status};
+    }
     if (call_type) this._currentCallType = call_type;
     clearTimeout(this._outgoingUiTimer);
     this._outgoingUiTimer = null;
@@ -107,6 +112,7 @@ _onHACallStatus(event) {
         return;
       }
       this._currentCallId = call_id;
+      if (answeredLocally) this._answeredByMe = true;
       this._answerPendingCallId = null;
       this._currentRemoteNode = remote_node_id;
       if (sip_bridge_id) this._sipBridgeId = sip_bridge_id;
@@ -121,17 +127,21 @@ _onHACallStatus(event) {
       this._stopRingtone();
       this._removePopup();
       this._dismissBrowserNotification();
-      if (isSipCall) {
+      const canJoin = this._initiatedHere || answeredLocally;
+      if (isSipCall && canJoin) {
         if (this._sipBridgeId) {
           this._startSIPCall(this._sipBridgeId).catch(e => console.error("[Simson] SIP active start:", e));
         } else {
           console.warn("[Simson] Active SIP call missing sip_bridge_id", { call_id, remote_node_id });
         }
-      } else {
+      } else if (!isSipCall && canJoin) {
         this._startWebRTC();
       }
       this._render();
     } else if (["ended","failed","missed","declined","timeout"].includes(status)) {
+      (this._endedCallIds ||= new Set()).add(call_id);
+      if (this._endedCallIds.size > 100) this._endedCallIds.delete(this._endedCallIds.values().next().value);
+      this._eventCallSnapshot = null;
       // Clear incoming timeout since call has ended.
       if (this._incomingCallTimeout) {
         clearTimeout(this._incomingCallTimeout);
@@ -149,6 +159,7 @@ _onHACallStatus(event) {
       this._answeredByMe = false;
       this._answerPendingCallId = null;
       this._outgoingIntentAt = 0;
+      this._initiatedHere = false;
       this._actionError = status === 'failed' ? 'The call could not be started. Check the selected gateway or SIP phone.' : '';
       // Refresh history after call ends.
       setTimeout(() => this._loadHistory(), 2000);
@@ -157,6 +168,7 @@ _onHACallStatus(event) {
   }
 
 _onHAIncomingCall(event) {
+    if (event.node_id && event.node_id !== this._nodeId()) return;
     const { call_id, from_node_id, from_label, call_type, target_user_id, metadata } = event;
     if (target_user_id && this._hass?.user?.id && target_user_id !== this._hass.user.id) {
       this._ignoredCallId = call_id;
@@ -190,6 +202,8 @@ _onHAIncomingCall(event) {
     }
     this._currentCallId = call_id;
     this._currentCallType = call_type || "voice";
+    this._eventCallSnapshot = {...metadata,call_id,state:'incoming',direction:'incoming',
+      remote_node_id:from_node_id,remote_label:from_label,call_type,target_user_id};
     this._currentRemoteNode = from_node_id;
     this._incomingFrom = from_label || from_node_id;
     this._incomingCallType = call_type || "voice";
@@ -284,7 +298,7 @@ _effectivePstnTrunk(includeDraft = true) {
 _isConnected() { return this._val("connection") === "connected"; }
 
 _callState() {
-    const state = this._val("call_state", "idle");
+    const state = this._visibleCall()?.state || 'idle';
     if ((state === "incoming" || state === "ringing" || state === "requesting") && this._isStaleRingingCall()) {
       return "idle";
     }
@@ -292,11 +306,24 @@ _callState() {
   }
 
 _activeCallAttr(key, fallback = "") {
-    return this._attr("call_state", key, fallback);
+    return this._visibleCall()?.[key] ?? fallback;
+  }
+
+_visibleCall() {
+    const userId = this._hass?.user?.id || '';
+    const calls = this._attr('calls_count', 'active_calls', []) || [];
+    const sensor = this._entity('call_state');
+    const candidates = [this._eventCallSnapshot, ...calls, {...sensor?.attributes, state: sensor?.state}]
+      .filter(call=>call && !this._endedCallIds?.has(call.call_id));
+    const selected = candidates.find(call => call.call_id === this._currentCallId &&
+      ownsCall(call, userId, this._currentCallId)) ||
+      candidates.find(call => ownsCall(call, userId, this._currentCallId));
+    return selected?.local_user_call && selected.caller_user_id === userId
+      ? {...selected, direction: 'outgoing', remote_label: selected.target_user_name || selected.remote_label} : selected;
   }
 
 _isStaleRingingCall() {
-    const startedAt = Number(this._attr("call_state", "started_at", 0));
+    const startedAt = Number(this._visibleCall()?.started_at || 0);
     if (!startedAt) return false;
     return (Date.now() - startedAt * 1000) > 90000;
   }

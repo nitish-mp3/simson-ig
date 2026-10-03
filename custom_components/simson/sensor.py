@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import time
+from hashlib import sha256
 
 from homeassistant.components.sensor import SensorEntity
 from homeassistant.config_entries import ConfigEntry
@@ -48,6 +49,19 @@ async def async_setup_entry(
         SimsonLastAutomationEventSensor(coordinator, entry),
     ]
     async_add_entities(entities, True)
+    known_users = set()
+
+    def add_contacts():
+        contacts = []
+        for user in (coordinator.data or {}).get("local_users", []):
+            if user["user_id"] not in known_users:
+                known_users.add(user["user_id"])
+                contacts.append(SimsonUserContactSensor(coordinator, entry, user))
+        if contacts:
+            async_add_entities(contacts, True)
+
+    add_contacts()
+    entry.async_on_unload(coordinator.async_add_listener(add_contacts))
 
 
 class SimsonBaseSensor(CoordinatorEntity, SensorEntity):
@@ -69,6 +83,36 @@ class SimsonBaseSensor(CoordinatorEntity, SensorEntity):
             "model": "Simson Call Relay",
             "sw_version": "1.0.0",
         }
+
+
+class SimsonUserContactSensor(SimsonBaseSensor):
+    _attr_icon = "mdi:account-voice"
+
+    def __init__(self, coordinator, entry, user):
+        super().__init__(coordinator, entry)
+        self._user_id = user["user_id"]
+        self._attr_name = user["user_name"]
+        self._contact_id = sha256(f"{entry.entry_id}:{self._user_id}".encode()).hexdigest()[:20]
+        self._attr_unique_id = f"{entry.entry_id}_user_{self._contact_id}"
+
+    @property
+    def native_value(self):
+        users = (self.coordinator.data or {}).get("local_users", [])
+        if not any(user["user_id"] == self._user_id for user in users):
+            return "unavailable"
+        calls = (self.coordinator.data or {}).get("calls_data", {}).get("calls", [])
+        active = next((call for call in calls if call.get("state") in ("requesting", "ringing", "incoming", "active")
+            and self._user_id in (call.get("caller_user_id"), call.get("target_user_id"), call.get("answered_by_user_id"))), None)
+        return active["state"] if active else "ready"
+
+    @property
+    def extra_state_attributes(self):
+        users = (self.coordinator.data or {}).get("local_users", [])
+        user = next((item for item in users if item["user_id"] == self._user_id), {})
+        return {"simson_contact": True, "contact_id": self._contact_id, "user_id": self._user_id,
+            "entry_id": self._entry.entry_id,
+            "node_id": (self.coordinator.data or {}).get("node_id", ""),
+            "user_name": user.get("user_name", self._attr_name)}
 
 
 class SimsonConnectionSensor(SimsonBaseSensor):

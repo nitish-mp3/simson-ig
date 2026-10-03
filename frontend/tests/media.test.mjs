@@ -3,11 +3,51 @@ import assert from 'node:assert/strict';
 import { withMediaDevices } from '../src/controllers/media-devices.js';
 import { withHomeAssistant } from '../src/controllers/home-assistant.js';
 import { withCallActions } from '../src/controllers/call-actions.js';
+import { withWebRTC } from '../src/controllers/webrtc.js';
 
 class Base {
   constructor() { this.isConnected=true;this._selectedAudioInput='';this._selectedVideoInput=''; }
   _render() {}
 }
+
+test('a call does not reuse an in-flight idle media authorization', async()=>{
+  const original=globalThis.fetch;
+  let release;
+  const requests=[];
+  globalThis.fetch=async url=>{
+    requests.push(url);
+    if(requests.length===1) await new Promise(resolve=>release=resolve);
+    return {ok:true,json:async()=>({sip:{enabled:url.includes('call-123')}})};
+  };
+  try {
+    const host=new (withWebRTC(Base))();
+    const idle=host._fetchWebRTCConfig();
+    host._currentCallId='call-123';
+    const active=host._fetchWebRTCConfig();
+    release();
+    assert.equal((await idle).sip.enabled,false);
+    assert.equal((await active).sip.enabled,true);
+    assert.equal(requests.length,2);
+  } finally {globalThis.fetch=original;}
+});
+
+test('answer waits for authorization and rejects media on a denied answer', async()=>{
+  const host=new (withCallActions(Base))();
+  let resolveAnswer,mediaStarts=0;
+  host._activeCallAttr=()=> 'incoming';
+  host._sipBridgeId='bridge';
+  host._stopRingtone=host._removePopup=host._dismissBrowserNotification=()=>{};
+  host._callService=()=>new Promise(resolve=>resolveAnswer=resolve);
+  host._startSIPCall=async()=>mediaStarts++;
+  const answer=host._answer();
+  assert.equal(mediaStarts,0);
+  resolveAnswer(false);await answer;
+  assert.equal(mediaStarts,0);
+  assert.equal(host._answeredByMe,false);
+  const accepted=host._answer();
+  resolveAnswer(undefined);await accepted;
+  assert.equal(mediaStarts,1);
+});
 test('camera failure retries microphone and late preview cancellation releases tracks',async()=>{
   const original=globalThis.navigator;
   const requests=[];

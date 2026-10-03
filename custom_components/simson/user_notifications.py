@@ -1,0 +1,79 @@
+from urllib.parse import urlencode, urlsplit, urlunsplit, parse_qsl
+
+
+def incoming_notification(call_id, node_id, label, dashboard_path):
+    if not dashboard_path.startswith("/") or dashboard_path.startswith("//"):
+        dashboard_path = "/lovelace/default_view"
+    location = urlsplit(dashboard_path)
+    def action_url(action):
+        query = dict(parse_qsl(location.query))
+        query.update(simson_action=action, simson_call=call_id, simson_node=node_id)
+        return urlunsplit(("", "", location.path, urlencode(query), location.fragment))
+    return {"title": "Incoming Simson call", "message": f"{label or 'A user'} is calling you",
+        "data": {"tag": f"simson_user_{call_id}", "persistent": True,
+            "url": dashboard_path, "actions": [
+                {"action": "URI", "title": "Answer", "uri": action_url("answer")},
+                {"action": "URI", "title": "Decline", "uri": action_url("decline")}]}}
+
+
+async def async_setup_user_notifications(hass, entry, coordinator):
+    from homeassistant.helpers.storage import Store
+    from homeassistant.exceptions import HomeAssistantError
+    import voluptuous as vol
+    import logging
+
+    logger = logging.getLogger(__name__)
+    storage = Store(hass, 1, f"simson_user_notifications_{entry.entry_id}")
+    targets = await storage.async_load() or {}
+    data = hass.data["simson"][entry.entry_id]
+    data["user_notification_targets"] = targets
+    data["user_notification_store"] = storage
+
+    async def set_target(call):
+        user = await hass.auth.async_get_user(call.context.user_id) if call.context.user_id else None
+        if call.context.user_id and (not user or not user.is_admin):
+            raise HomeAssistantError("Only an administrator can configure user notification targets")
+        entity = hass.states.get(call.data["entity_id"])
+        if not entity or not entity.attributes.get("simson_contact"):
+            raise HomeAssistantError("Choose a Simson user contact")
+        owner = hass.data["simson"].get(entity.attributes.get("entry_id"), {})
+        mapping = owner.get("user_notification_targets")
+        if mapping is None:
+            raise HomeAssistantError("This contact is unavailable")
+        service = call.data.get("notify_service", "")
+        if service and (not service.startswith("notify.mobile_app_") or not hass.services.has_service("notify", service.removeprefix("notify."))):
+            raise HomeAssistantError("Choose an existing Companion app notify service")
+        mapping[entity.attributes["user_id"]] = {"service": service, "dashboard_path": call.data.get("dashboard_path", "/lovelace/default_view")}
+        await owner["user_notification_store"].async_save(mapping)
+
+    if not hass.services.has_service("simson", "set_user_notification_target"):
+        hass.services.async_register("simson", "set_user_notification_target", set_target,
+            schema=vol.Schema({vol.Required("entity_id"): str, vol.Optional("notify_service", default=""): str,
+                vol.Optional("dashboard_path", default="/lovelace/default_view"): str}))
+
+    async def notify(event):
+        payload = event.data or {}
+        metadata = payload.get("metadata") or {}
+        user_id = payload.get("target_user_id") or metadata.get("target_user_id")
+        node_id = (coordinator.data or {}).get("node_id", "")
+        target = targets.get(user_id) or {}
+        service = target.get("service", "")
+        call_id = payload.get("call_id")
+        if not call_id or not service or not node_id or payload.get("node_id") != node_id:
+            return
+        if event.event_type == "simson_incoming_call":
+            path = target.get("dashboard_path") or "/lovelace/default_view"
+            if not path.startswith("/") or path.startswith("//"):
+                path = "/lovelace/default_view"
+            body = incoming_notification(call_id, node_id, payload.get("from_label"), path)
+        elif payload.get("status") in ("active", "ended", "failed", "missed", "declined", "timeout"):
+            body = {"message": "clear_notification", "data": {"tag": f"simson_user_{call_id}"}}
+        else:
+            return
+        try:
+            await hass.services.async_call("notify", service.removeprefix("notify."), body, blocking=True)
+        except Exception as error:
+            logger.warning("User call notification failed: %s", error)
+
+    entry.async_on_unload(hass.bus.async_listen("simson_incoming_call", notify))
+    entry.async_on_unload(hass.bus.async_listen("simson_call_status", notify))

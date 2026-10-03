@@ -202,25 +202,130 @@ test('split cards share one session and offline states never show phantom calls'
   await page.close();
 });
 
-test('two browser nodes exchange audio and video and release devices after hangup',async()=>{
+test('dialing appears immediately and unrelated active calls never acquire media',async()=>{
   const page=await browser.newPage();await load(page);
-  await page.evaluate(async()=>{
+  await page.evaluate(()=>{
+    const host=document.querySelector('simson-relay-card')._card.session;
+    window.mediaStarts=0;host._startSIPCall=()=>{window.mediaStarts++;return Promise.resolve();};
+    window.mockHass={...window.mockHass,states:{...window.mockHass.states,
+      'sensor.simson_office_call_state':{state:'active',attributes:{call_id:'private',direction:'outgoing',call_type:'sip',sip_bridge_id:'private-bridge'}}}};
+    document.querySelector('simson-relay-card').hass=window.mockHass;
+  });
+  await page.getByRole('button',{name:'Place call'}).waitFor();
+  assert.equal(await page.evaluate(()=>window.mediaStarts),0);
+  await page.locator('#node-input').fill('59330025');
+  await page.getByRole('button',{name:'Place call'}).click();
+  await page.getByText('Connecting to your call service',{exact:true}).waitFor({timeout:500});
+  await page.evaluate(()=>window.events.simson_call_status({data:{call_id:'mine',status:'ringing',direction:'outgoing',caller_user_id:'user1',remote_node_id:'phone:59330025',call_type:'sip'}}));
+  await page.getByText('The destination is being called',{exact:true}).waitFor({timeout:500});
+  assert.equal(await page.evaluate(()=>window.mediaStarts),0);
+  await page.close();
+});
+
+test('Mauritius card dialing preserves +230 and the explicitly selected 6202 trunk',async()=>{
+  const page=await browser.newPage();await load(page);
+  await page.locator('#node-input').fill('+23059330025');
+  await page.evaluate(()=>document.querySelector('simson-relay-card')._card.session._pstnTrunkDraft='6202');
+  await page.getByRole('button',{name:'Place call'}).click();
+  await page.waitForFunction(()=>window.calls.some(call=>call.service==='make_call'));
+  const call=await page.evaluate(()=>window.calls.find(call=>call.service==='make_call'));
+  assert.deepEqual(call.data,{phone_number:'+23059330025',trunk:'6202',call_type:'sip',caller_user_id:'user1'});
+  await page.getByText('Connecting to your call service',{exact:true}).waitFor();
+  await page.close();
+});
+
+test('notification handoff invokes the exact authenticated call action once',async()=>{
+  for(const action of ['answer','decline']) {
+    const page=await browser.newPage();await load(page);
+    await page.evaluate(action=>{
+      const shell=document.querySelector('simson-relay-card');
+      const host=shell._card.session;
+      window.calls=[];host._notificationHandoffChecked=false;
+      history.replaceState({},'',`/?simson_action=${action}&simson_call=notification-call&simson_node=office`);
+      shell.hass={...window.mockHass};
+      shell.hass={...window.mockHass};
+    },action);
+    await page.waitForFunction(()=>window.calls.length>0);
+    const calls=await page.evaluate(()=>window.calls.filter(call=>['answer_call','reject_call'].includes(call.service)));
+    assert.equal(calls.length,1);
+    assert.equal(calls[0].service,action==='answer'?'answer_call':'reject_call');
+    assert.equal(calls[0].data.call_id,'notification-call');
+    assert.equal(await page.evaluate(()=>location.search),'');
+    await page.close();
+  }
+});
+
+test('door card does not start calls or live streaming on page load',async()=>{
+  const page=await browser.newPage();await load(page);
+  await page.evaluate(()=>{
+    const card=document.createElement('simson-door-phone-card');
+    card.setConfig({node_id:'office',extension:'1603'});card.hass=window.mockHass;
+    document.querySelector('#mount').replaceChildren(card);
+  });
+  await page.getByRole('button',{name:'Call door phone'}).waitFor();
+  assert.equal(await page.evaluate(()=>window.calls.filter(call=>call.service==='make_call').length),0);
+  assert.equal(await page.evaluate(()=>document.querySelector('simson-door-phone-card')._card.shadowRoot.querySelector('simson-door-camera').live),false);
+  await page.close();
+});
+
+test('door camera retains its native HA card through camera mode changes',async()=>{
+  const page=await browser.newPage();await load(page);
+  await page.evaluate(()=>{
+    window.loadCardHelpers=async()=>({createCardElement:config=>{
+      const camera=document.createElement('div');camera.textContent='Camera preview';camera.dataset.mode=config.camera_view;return camera;
+    }});
+    const card=document.createElement('simson-door-phone-card');
+    card.setConfig({node_id:'office',extension:'1603',camera_entity:'camera.door'});
+    card.hass={...window.mockHass,states:{...window.mockHass.states,'camera.door':{state:'idle',attributes:{}}}};
+    document.querySelector('#mount').replaceChildren(card);
+  });
+  await page.locator('simson-door-camera [data-mode="auto"]').waitFor();
+  await page.getByRole('button',{name:'View live video',exact:true}).click();
+  await page.locator('simson-door-camera [data-mode="live"]').waitFor();
+  await page.getByRole('button',{name:'Stop video',exact:true}).click();
+  await page.locator('simson-door-camera [data-mode="auto"]').waitFor();
+  await page.close();
+});
+
+test('automation panels use the available width instead of a hidden grid column',async()=>{
+  const page=await browser.newPage({viewport:{width:1440,height:1100}});
+  await page.goto(origin+'/addon/');
+  await page.locator('[data-page="automation"]').first().click();
+  await page.getByRole('button',{name:'Door camera flow',exact:true}).click();
+  const dimensions=await page.evaluate(()=>{
+    const panels=document.querySelector('.automation-panels');
+    const visible=[...panels.children].find(panel=>!panel.hidden);
+    return {available:panels.getBoundingClientRect().width,actual:visible.getBoundingClientRect().width};
+  });
+  assert.ok(dimensions.actual>dimensions.available*0.95);
+  await page.screenshot({path:path.join(integrationRoot,'frontend/test-results/automation-flow-desktop.png'),fullPage:true});
+  await page.close();
+});
+
+for (const sameNode of [false,true]) test(`${sameNode ? 'two users on one node' : 'two browser nodes'} exchange audio and video and release devices after hangup`,async()=>{
+  const page=await browser.newPage();await load(page);
+  await page.evaluate(async(sameNode)=>{
     const first=document.querySelector('simson-relay-card')._card.session;
-    const second=document.createElement('simson-call-session');second.setConfig({node_id:'studio'});document.body.append(second);
+    const second=document.createElement('simson-call-session');second.setConfig({node_id:sameNode?'office':'studio'});document.body.append(second);
     window.peers=[first,second];window.signalErrors=[];
     for(const [index,peer] of window.peers.entries()) {
       peer._render=()=>{};
+      peer._hass={...window.mockHass,user:{id:`user${index+1}`}};
       peer._videoEnabled=true;peer._isCaller=index===0;peer._polite=index!==0;
+      peer._answeredByMe=index!==0;
+      peer._initiatedHere=index===0;
       peer._incomingCallType='video';
-      peer._currentCallId='test-video';peer._currentRemoteNode=index===0?'studio':'office';
+      peer._currentCallId='test-video';peer._currentRemoteNode=index===0&&!sameNode?'studio':'office';
       peer._fetchWebRTCConfig=async()=>({ice_servers:[]});
       peer._sendWebRTCSignal=(signal_type,data)=>{
         const remote=window.peers[1-index];
-        remote._handleWebRTCSignal({call_id:'test-video',signal_type,data}).catch(error=>window.signalErrors.push(error.message));
+        const signal={call_id:'test-video',signal_type,data:{...data,simson_sender_user_id:peer._hass.user.id}};
+        peer._handleWebRTCSignal(signal).catch(error=>window.signalErrors.push(error.message));
+        remote._handleWebRTCSignal(signal).catch(error=>window.signalErrors.push(error.message));
       };
     }
     await second._startWebRTC();await first._startWebRTC();
-  });
+  },sameNode);
   await page.waitForFunction(()=>window.peers.every(peer=>peer._pc?.connectionState==='connected' && peer._remoteStream?.getVideoTracks().length),{timeout:15000});
   const result=await page.evaluate(()=>{
     const tracks=window.peers.flatMap(peer=>peer._localStream.getTracks());

@@ -16,7 +16,7 @@ _endActiveCallFromSip() {
 
 async _startSIPCall(bridgeId) {
     console.log("[Simson SIP] _startSIPCall:", bridgeId);
-    if (!bridgeId) { console.warn("[Simson SIP] no bridgeId — abort"); return; }
+    if (!bridgeId || (!this._initiatedHere && !this._answeredByMe && !this._answerPendingCallId)) return;
     // Guard against double-start: set pending flag BEFORE the async gap so a second
     // call (from set hass() sensor update racing with the HA event) exits early.
     if (this._pendingSIPBridgeId === bridgeId || (this._sipUA && this._sipUA._activeBridge === bridgeId)) {

@@ -334,3 +334,7 @@ class SimsonApiClient:
 
     async def get_call_history(self, limit: int = 50) -> dict:
         return await self._get(f"/api/history?limit={limit}")
+
+    async def clear_stuck_calls(self, endpoint_id: str) -> dict:
+        from urllib.parse import quote
+        return await self._post(f"/api/sip-endpoints/{quote(endpoint_id, safe='')}/clear-stuck")

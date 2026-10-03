@@ -1,24 +1,32 @@
 import { ICE_SERVERS } from '../transport/ice.js';
 export const withWebRTC = Base => class extends Base {
 async _fetchWebRTCConfig() {
-    if (this._webrtcConfig) return this._webrtcConfig; // cache
-    if (this._webrtcConfigPromise) return this._webrtcConfigPromise;
-    if (Date.now() < (this._webrtcConfigNextRetryAt || 0)) {
+    const callId = this._currentCallId || '';
+    if (this._webrtcConfig && this._webrtcConfigCallId === callId) return this._webrtcConfig;
+    if (this._webrtcConfigPromise) {
+      if (this._webrtcConfigPromiseCallId === callId) return this._webrtcConfigPromise;
+      await this._webrtcConfigPromise;
+      return this._fetchWebRTCConfig();
+    }
+    if (this._webrtcConfigRetryCallId === callId && Date.now() < (this._webrtcConfigNextRetryAt || 0)) {
       return { ice_servers: ICE_SERVERS, sip: { enabled: false } };
     }
+    this._webrtcConfigPromiseCallId = callId;
     this._webrtcConfigPromise = (async () => {
       try {
         const token = this._hass?.auth?.data?.access_token;
-        const resp = await fetch("/api/webrtc-config", {
+        const resp = await fetch('/api/webrtc-config?call_id=' + encodeURIComponent(callId), {
           headers: token ? { Authorization: "Bearer " + token } : {},
           signal: AbortSignal.timeout(8000),
         });
         if (resp.ok) {
           this._webrtcConfig = await resp.json();
+          this._webrtcConfigCallId = callId;
           this._webrtcConfigNextRetryAt = 0;
           return this._webrtcConfig;
         }
       } catch (e) { /* fall through to defaults */ }
+      this._webrtcConfigRetryCallId = callId;
       this._webrtcConfigNextRetryAt = Date.now() + 30000;
       return { ice_servers: ICE_SERVERS, sip: { enabled: false } };
     })();
@@ -161,8 +169,10 @@ async _startWebRTC() {
 
 async _handleWebRTCSignal(event) {
     const { call_id, from_node_id, signal_type, data } = event;
+    if (data?.simson_sender_user_id && data.simson_sender_user_id === this._hass?.user?.id) return;
 
     if (!call_id || !this._currentCallId || call_id !== this._currentCallId) return;
+    if (!this._initiatedHere && !this._answeredByMe && this._answerPendingCallId !== call_id) return;
     if (from_node_id && this._currentRemoteNode && from_node_id !== this._currentRemoteNode) return;
 
     if (signal_type === "offer") {

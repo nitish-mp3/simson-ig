@@ -8,9 +8,15 @@ export function dialView(host, view) {
     if (!targets.some(target => (target.node_id || target.id) === node)) targets.push({id:node,node_id:node,label:node,type:'node'});
   }
   const canDial = view.connected && !view.hasCall;
+  const users = Object.entries(host._hass?.states || {}).filter(([,state])=>state.attributes?.simson_contact &&
+    state.attributes.node_id === host._nodeId() && state.attributes.user_id !== host._hass?.user?.id);
   const dial = () => canDial && host._runAction('dial', () => host._dialSmartValue(host._nodeInputDraft, host._pstnTrunkDraft));
   return html`<section class="dial-workspace">
     <div class="intro"><span class="eyebrow">START A CONVERSATION</span><h2>Who’s on your mind?</h2><p>A teammate, a room, or a number. One place to call.</p></div>
+    ${users.length ? html`<div class="section-heading"><h3>People at this site</h3><span>${users.length} contacts</span></div>
+      <div class="contacts">${repeat(users,([entity])=>entity,([entity,user])=>html`<button class="contact" ?disabled=${!canDial || Boolean(host._actionPending) || user.state === 'unavailable'}
+        @click=${()=>host._runAction('user:'+entity,()=>host._dial(host._nodeId(),user.attributes.user_id,user.attributes.user_name))}>
+        <span class="avatar">${String(user.attributes.user_name || 'User').slice(0,2).toUpperCase()}</span><span class="contact-text"><b>${user.attributes.user_name}</b><small>${user.state === 'ready' ? 'Call directly' : user.state}</small></span><span>↗</span></button>`)}</div>` : nothing}
     <div class="route-options" aria-label="Call route">${[['auto','Auto'],['node','Node'],['sip','SIP phone'],['pstn','Outside']].map(([id,label]) => html`<button class=${host._smartRouteMode === id ? 'selected' : ''} aria-pressed=${host._smartRouteMode === id} @click=${() => {host._smartRouteMode=id;host.requestUpdate();}}>${label}</button>`)}</div>
     <label class="field"><span>Number, extension or node</span><div class="dial-input"><input id="node-input" autocomplete="off" .value=${host._nodeInputDraft} placeholder="Search a node or dial a number" @input=${event => {host._nodeInputDraft=event.target.value;host.requestUpdate();}} @keydown=${event => {if(event.key==='Enter') dial();}}><button class="primary" aria-label="Place call" ?disabled=${!canDial || Boolean(host._actionPending) || !host._nodeInputDraft.trim()} @click=${dial}>Call ↗</button></div></label>
     <div class="route-hint"><span>${route.label}</span><small>${route.hint}</small></div>

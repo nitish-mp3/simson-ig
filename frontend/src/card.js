@@ -5,6 +5,7 @@ import { callView } from './views/call.js';
 import { historyView } from './views/history.js';
 import { mediaView } from './views/media.js';
 import { dialogsView } from './views/dialogs.js';
+import { doorView } from './views/door.js';
 import styles from './styles/card.css';
 import { VERSION } from './version.js';
 
@@ -58,7 +59,7 @@ export class SimsonCard extends LitElement {
         ${!view.connected ? html`<div class="notice" role="status"><b>Node is offline</b><br>Calling resumes when the addon reconnects. Your saved contacts remain available.</div>` : nothing}
         ${host._actionError ? html`<div class="notice error" role="alert">${host._actionError}</div>` : nothing}
         ${host._actionPending ? html`<div class="action-progress" role="status">${host._actionPending}</div>` : nothing}
-        ${mode === 'live' ? (view.hasCall ? callView(host,view) : html`<div class="live-idle"><span class="idle-indicator"></span><h2>Ready for your next call</h2><p>Answer, mute, video and hang-up controls appear here during a call.</p></div>`) :
+        ${mode === 'door' ? doorView(this,host,view,callView) : mode === 'live' ? (view.hasCall ? callView(host,view) : html`<div class="live-idle"><span class="idle-indicator"></span><h2>Ready for your next call</h2><p>Answer, mute, video and hang-up controls appear here during a call.</p></div>`) :
           mode === 'history' ? historyView(host) : mode === 'devices' ? mediaView(host) : mode === 'dial' ? (panel === 'media' ? html`<button class="text-button" @click=${()=>host._selectTab('dial')}>← Back to dialing</button>${mediaView(host)}` : dialView(host,view)) : html`
             ${view.hasCall ? callView(host,view) : nothing}
             <nav class="tabs" aria-label="Call workspace">${[['dial','Dial'],['history','Recent'],['media','Devices']].map(([id,label])=>html`<button class=${panel===id?'selected':''} aria-current=${panel===id?'page':'false'} @click=${()=>host._selectTab(id)}>${label}</button>`)}</nav>

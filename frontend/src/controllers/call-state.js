@@ -1,3 +1,5 @@
+import { ownsCall } from '../state/call-ownership.js';
+
 export function reconcileCall() {
  const nodeId = this._nodeId();
     const connected = this._isConnected();
@@ -14,16 +16,12 @@ export function reconcileCall() {
     const targetUserId = this._activeCallAttr("target_user_id", "");
     const callerUserId = this._activeCallAttr("caller_user_id", "");
     const answeredByUserId = this._activeCallAttr("answered_by_user_id", "");
-    const isMyCall = !callId ||
-      callId === this._currentCallId ||
-      !direction ||
-      (direction === "incoming" &&
-        (!targetUserId || targetUserId === myUserId) &&
-        (!answeredByUserId || answeredByUserId === myUserId)) ||
-      (direction === "outgoing" && (!callerUserId || callerUserId === myUserId));
+    const isMyCall = ownsCall({call_id: callId, direction: entityDirection,
+      state: callState, target_user_id: targetUserId, caller_user_id: callerUserId,
+      answered_by_user_id: answeredByUserId}, myUserId, this._currentCallId);
     const liveStates = ['incoming', 'requesting', 'ringing', 'active'];
-    const provisionalOutgoing = outgoingIntentActive && ['idle', 'unknown', 'unavailable'].includes(callState);
-    const effectiveCallState = isMyCall && ((liveStates.includes(callState) && callId) || provisionalOutgoing)
+    const provisionalOutgoing = outgoingIntentActive && (!isMyCall || !liveStates.includes(callState));
+    const effectiveCallState = provisionalOutgoing ? 'requesting' : isMyCall && (liveStates.includes(callState) && callId)
       ? (provisionalOutgoing ? 'requesting' : callState)
       : 'idle';
 
@@ -39,7 +37,7 @@ export function reconcileCall() {
     const activeCallType = this._activeCallAttr("call_type", "");
     const activeSipBridgeId = this._activeCallAttr("sip_bridge_id", "");
 
-    const remoteLabel = this._activeCallAttr("remote_name") ||
+    const remoteLabel = (this._initiatedHere && this._currentRemoteLabel) || (provisionalOutgoing && String(this._currentRemoteNode || '').replace(/^phone:/, '')) || this._activeCallAttr("remote_name") ||
                         this._activeCallAttr("display_name") ||
                         this._activeCallAttr("remote_label") ||
                         this._activeCallAttr("remote_number") ||
@@ -91,13 +89,14 @@ export function reconcileCall() {
         const isSipCall = activeCallType === "sip" ||
           String(this._currentRemoteNode || "").startsWith("sip:") ||
           String(this._currentRemoteNode || "").startsWith("asterisk:");
-        if (isSipCall) {
+        const canJoin = this._initiatedHere || this._answeredByMe || this._answerPendingCallId === callId;
+        if (isSipCall && canJoin) {
           if (this._sipBridgeId) {
             this._startSIPCall(this._sipBridgeId).catch(e => console.error("[Simson] SIP state active start:", e));
           } else {
             console.warn("[Simson] Active SIP state missing sip_bridge_id", { callId, remote: this._currentRemoteNode });
           }
-        } else {
+        } else if (!isSipCall && canJoin) {
           this._startWebRTC();
         }
       } else if (effectiveCallState === "idle" && prev !== "idle") {

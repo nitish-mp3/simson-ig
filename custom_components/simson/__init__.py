@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from datetime import timedelta
-from urllib.parse import unquote
+from urllib.parse import unquote, urlsplit, urlunsplit, parse_qsl, urlencode
 
 import aiohttp
 import voluptuous as vol
@@ -19,6 +19,8 @@ from homeassistant.components.http import HomeAssistantView
 from aiohttp import web
 
 from .api import SimsonApiClient
+from .call_access import can_control_call
+from .user_notifications import async_setup_user_notifications
 from .frontend import async_register_card as _async_register_card
 from .const import (
     DOMAIN,
@@ -83,6 +85,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         # Register services and live event sync.
         _register_services(hass, client)
         _register_live_event_sync(hass, entry, coordinator)
+        await async_setup_user_notifications(hass, entry, coordinator)
 
         # Expose /api/webrtc-config so the Lovelace card can fetch SIP credentials.
         hass.http.register_view(WebRTCConfigView(client))
@@ -116,7 +119,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                         SERVICE_HANGUP_CALL, SERVICE_WEBRTC_SIGNAL, SERVICE_GET_TARGETS,
                         SERVICE_USER_HEARTBEAT, SERVICE_GET_REMOTE_USERS,
                         SERVICE_GET_CALL_HISTORY, SERVICE_RUN_TRIGGER,
-                        SERVICE_TRANSFER_CALL, SERVICE_CONNECT_SIP_PHONES):
+                        SERVICE_TRANSFER_CALL, SERVICE_CONNECT_SIP_PHONES, "clear_stuck_calls", "call_user", "set_user_notification_target"):
                 hass.services.async_remove(DOMAIN, svc)
     return unload_ok
 
@@ -138,6 +141,9 @@ class SimsonCoordinator(DataUpdateCoordinator):
             status = await self.client.status()
             calls = await self.client.calls()
             fresh = {**status, "calls_data": calls}
+            users = await self.hass.auth.async_get_users()
+            fresh["local_users"] = [{"user_id": user.id, "user_name": user.name or "User"}
+                for user in users if user.is_active and not user.system_generated]
             # Event listeners enrich these values immediately between polls.
             # Preserve them when /api/status does not include event history;
             # otherwise every five-second refresh resets automation sensors to
@@ -164,6 +170,12 @@ class WebRTCConfigView(HomeAssistantView):
     async def get(self, request: web.Request) -> web.Response:
         try:
             data = await self._client.webrtc_config()
+            user = request.get("hass_user")
+            call_id = str(request.query.get("call_id") or "")
+            calls_data = await self._client.calls() if call_id else {}
+            selected = next((item for item in calls_data.get("calls", []) if item.get("call_id") == call_id), None)
+            if not user or not can_control_call(selected, user.id, "signal"):
+                data = {**data, "sip": {"enabled": False}}
             return web.json_response(data)
         except Exception as err:
             logger.error("Failed to proxy webrtc-config: %s", err)
@@ -207,8 +219,15 @@ class SimsonCallActionView(HomeAssistantView):
         for _, data in entries:
             client = data["client"]
             try:
+                user = request.get("hass_user")
+                calls_data = await client.calls()
+                selected = next((item for item in calls_data.get("calls", []) if item.get("call_id") == call_id), None)
+                if selected is None:
+                    continue
+                if not user or not can_control_call(selected, user.id, "reject" if action == "decline" else action):
+                    raise web.HTTPForbidden(text="This call belongs to another user or is no longer available")
                 if action == "answer":
-                    result = await client.answer_call(call_id, strict_call_id=True)
+                    result = await client.answer_call(call_id, answered_by_user_id=user.id, strict_call_id=True)
                 elif action == "decline":
                     result = await client.reject_call(
                         call_id,
@@ -227,6 +246,8 @@ class SimsonCallActionView(HomeAssistantView):
                 if err.status == 404:
                     continue
                 break
+            except web.HTTPForbidden:
+                raise
             except Exception as err:  # noqa: BLE001 - shown as HA notification below
                 last_error = err
                 break
@@ -250,6 +271,12 @@ class SimsonCallActionView(HomeAssistantView):
                 blocking=False,
             )
         self._hass.bus.async_fire("simson_notification_action_result", event_data)
+        if result is not None and action == "answer":
+            location = urlsplit(redirect)
+            query = dict(parse_qsl(location.query))
+            query["simson_answer"] = call_id
+            query["simson_node"] = node_id
+            redirect = urlunsplit(("", "", location.path, urlencode(query), location.fragment))
         raise web.HTTPFound(location=redirect)
 
 
@@ -264,6 +291,61 @@ def _register_call_action_view(hass: HomeAssistant) -> None:
 
 def _register_services(hass: HomeAssistant, client: SimsonApiClient) -> None:
     """Register Simson services."""
+
+    async def authorize_call(call: ServiceCall, action: str) -> str:
+        call_id = str(call.data.get("call_id", "") or "")
+        user_id = call.context.user_id
+        if not user_id:
+            return call_id
+        data = await client.calls()
+        candidates = data.get("calls", [])
+        if call_id:
+            selected = next((item for item in candidates if item.get("call_id") == call_id), None)
+        else:
+            selected = next((item for item in candidates if can_control_call(item, user_id, action)), None)
+        if not selected or not can_control_call(selected, user_id, action):
+            raise HomeAssistantError("This call belongs to another user or is no longer available")
+        return selected["call_id"]
+
+    async def handle_clear_stuck_calls(call: ServiceCall) -> None:
+        if call.context.user_id:
+            user = await hass.auth.async_get_user(call.context.user_id)
+            if not user or not user.is_admin:
+                raise HomeAssistantError("Only an administrator can release gateway channels")
+        try:
+            result = await client.clear_stuck_calls(call.data["endpoint_id"])
+            fire_service_result("clear_stuck_calls", result)
+            refresh_all_entries()
+        except Exception as err:
+            raise_service_error("clear_stuck_calls", err)
+
+    if not hass.services.has_service(DOMAIN, "clear_stuck_calls"):
+        hass.services.async_register(DOMAIN, "clear_stuck_calls", handle_clear_stuck_calls,
+            schema=vol.Schema({vol.Required("endpoint_id"): vol.All(str, vol.Length(min=1, max=128))}))
+
+    async def handle_call_user(call: ServiceCall) -> None:
+        entity = hass.states.get(call.data["entity_id"])
+        if not entity or not entity.attributes.get("simson_contact"):
+            raise HomeAssistantError("Choose a Simson user contact entity")
+        user_id = entity.attributes.get("user_id")
+        user = await hass.auth.async_get_user(user_id)
+        if not user or not user.is_active or user.system_generated:
+            raise HomeAssistantError("The selected user is no longer available")
+        try:
+            result = await client.make_call(target_node_id=entity.attributes["node_id"],
+                target_user_id=user_id, target_user_name=user.name or "User",
+                caller_user_id=call.context.user_id or call.data.get("caller_user_id", ""),
+                call_type=call.data.get("call_type", "voice"))
+            fire_service_result("call_user", result)
+            refresh_all_entries()
+        except Exception as err:
+            raise_service_error("call_user", err)
+
+    if not hass.services.has_service(DOMAIN, "call_user"):
+        hass.services.async_register(DOMAIN, "call_user", handle_call_user,
+            schema=vol.Schema({vol.Required("entity_id"): str,
+                vol.Optional("call_type", default="voice"): vol.In(["voice", "video"]),
+                vol.Optional("caller_user_id", default=""): str}))
 
     def normalize_auto_mode(value: str, default: str = "speaker") -> str:
         """Map friendly service values to the exact VPS/Asterisk auto-answer modes."""
@@ -312,7 +394,7 @@ def _register_services(hass: HomeAssistant, client: SimsonApiClient) -> None:
         call_type = call.data.get("call_type", "voice")
         target_user_id = call.data.get("target_user_id", "")
         target_user_name = call.data.get("target_user_name", "")
-        caller_user_id = call.data.get("caller_user_id", "")
+        caller_user_id = call.context.user_id or call.data.get("caller_user_id", "")
         try:
             result = await client.make_call(
                 target_node_id=target,
@@ -341,7 +423,7 @@ def _register_services(hass: HomeAssistant, client: SimsonApiClient) -> None:
         caller_id = call.data.get("caller_id", "")
         target_user_id = call.data.get("target_user_id", "")
         target_user_name = call.data.get("target_user_name", "")
-        caller_user_id = call.data.get("caller_user_id", "")
+        caller_user_id = call.context.user_id or call.data.get("caller_user_id", "")
         try:
             result = await client.call_sip_phone(
                 extension=extension,
@@ -360,7 +442,7 @@ def _register_services(hass: HomeAssistant, client: SimsonApiClient) -> None:
         phone_number = str(call.data["phone_number"]).strip()
         trunk = str(call.data.get("trunk", "") or "").strip()
         caller_id = call.data.get("caller_id", "")
-        caller_user_id = call.data.get("caller_user_id", "")
+        caller_user_id = call.context.user_id or call.data.get("caller_user_id", "")
         max_duration_sec = call.data.get("max_duration_sec", 120)
         try:
             result = await client.call_phone_number(
@@ -377,36 +459,36 @@ def _register_services(hass: HomeAssistant, client: SimsonApiClient) -> None:
             raise_service_error(f"call_phone_number {phone_number}", err)
 
     async def handle_answer_call(call: ServiceCall) -> None:
-        call_id = call.data.get("call_id", "")
-        answered_by_user_id = call.data.get("answered_by_user_id", "")
+        call_id = await authorize_call(call, "answer")
+        answered_by_user_id = call.context.user_id or call.data.get("answered_by_user_id", "")
         try:
-            result = await client.answer_call(call_id, answered_by_user_id=answered_by_user_id)
+            result = await client.answer_call(call_id, answered_by_user_id=answered_by_user_id, strict_call_id=bool(call.context.user_id))
             fire_service_result(SERVICE_ANSWER_CALL, result)
             refresh_all_entries()
         except Exception as err:
             raise_service_error("answer_call", err)
 
     async def handle_reject_call(call: ServiceCall) -> None:
-        call_id = call.data.get("call_id", "")
+        call_id = await authorize_call(call, "reject")
         reason = call.data.get("reason", "rejected")
         try:
-            result = await client.reject_call(call_id, reason)
+            result = await client.reject_call(call_id, reason, strict_call_id=bool(call.context.user_id))
             fire_service_result(SERVICE_REJECT_CALL, result)
             refresh_all_entries()
         except Exception as err:
             raise_service_error("reject_call", err)
 
     async def handle_hangup_call(call: ServiceCall) -> None:
-        call_id = call.data.get("call_id", "")
+        call_id = await authorize_call(call, "hangup")
         try:
-            result = await client.hangup_call(call_id)
+            result = await client.hangup_call(call_id, strict_call_id=bool(call.context.user_id))
             fire_service_result(SERVICE_HANGUP_CALL, result)
             refresh_all_entries()
         except Exception as err:
             raise_service_error("hangup_call", err)
 
     async def handle_transfer_call(call: ServiceCall) -> None:
-        call_id = call.data["call_id"]
+        call_id = await authorize_call(call, "transfer")
         target_node_id = call.data["target_node_id"]
         target_user_id = call.data.get("target_user_id", "")
         target_user_name = call.data.get("target_user_name", "")
@@ -519,10 +601,12 @@ def _register_services(hass: HomeAssistant, client: SimsonApiClient) -> None:
         )
 
     async def handle_webrtc_signal(call: ServiceCall) -> None:
-        call_id = call.data["call_id"]
+        call_id = await authorize_call(call, "signal")
         to_node_id = call.data["to_node_id"]
         signal_type = call.data["signal_type"]
         data = call.data["data"]
+        if call.context.user_id:
+            data = {**data, "simson_sender_user_id": call.context.user_id}
         try:
             await client.webrtc_signal(call_id, to_node_id, signal_type, data)
         except Exception as err:
@@ -614,7 +698,7 @@ def _register_services(hass: HomeAssistant, client: SimsonApiClient) -> None:
         )
 
     async def handle_user_heartbeat(call: ServiceCall) -> None:
-        user_id = call.data["user_id"]
+        user_id = call.context.user_id or call.data["user_id"]
         user_name = call.data["user_name"]
         try:
             await client.user_heartbeat(user_id, user_name)
@@ -635,7 +719,13 @@ def _register_services(hass: HomeAssistant, client: SimsonApiClient) -> None:
     async def handle_get_remote_users(call: ServiceCall) -> None:
         node_id = call.data["node_id"]
         try:
-            result = await client.get_remote_users(node_id)
+            status = await client.status()
+            if node_id == status.get("node_id"):
+                users = await hass.auth.async_get_users()
+                result = {"node_id": node_id, "users": [{"user_id": user.id, "user_name": user.name or "User"}
+                    for user in users if user.is_active and not user.system_generated]}
+            else:
+                result = await client.get_remote_users(node_id)
             hass.bus.async_fire("simson_remote_users", result)
         except Exception as err:
             logger.error("Failed to get remote users: %s", err)
@@ -810,8 +900,12 @@ def _register_mobile_notification_actions(
         data = coordinator.data if coordinator and isinstance(coordinator.data, dict) else {}
         return str(data.get("node_id") or "").strip()
 
-    async def _run_action(action_name: str, call_id: str, notify_ref: str = "") -> None:
+    async def _run_action(action_name: str, call_id: str, notify_ref: str = "", user_id: str = "") -> None:
         try:
+            calls_data = await client.calls()
+            selected = next((item for item in calls_data.get("calls", []) if item.get("call_id") == call_id), None)
+            if not can_control_call(selected, user_id, "reject" if action_name == "decline" else action_name):
+                raise HomeAssistantError("Use the authenticated notification link to control your call")
             if action_name == "answer":
                 result = await client.answer_call(
                     call_id,
@@ -882,7 +976,7 @@ def _register_mobile_notification_actions(
                 return
             if call_id:
                 hass.async_create_task(
-                    _run_action(scoped_prefixes[parts[0]], call_id, notify_ref)
+                    _run_action(scoped_prefixes[parts[0]], call_id, notify_ref, event.context.user_id or "")
                 )
             return
 
@@ -896,7 +990,7 @@ def _register_mobile_notification_actions(
             if action.startswith(prefix):
                 call_id = action.removeprefix(prefix)
                 if call_id:
-                    hass.async_create_task(_run_action(action_name, call_id))
+                    hass.async_create_task(_run_action(action_name, call_id, user_id=event.context.user_id or ""))
                 return
 
     unsub = hass.bus.async_listen("mobile_app_notification_action", _handle_action_event)

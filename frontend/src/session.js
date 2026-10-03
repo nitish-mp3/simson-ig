@@ -16,19 +16,50 @@ export class CallSession extends CardController {
 
   set hass(value) {
     const previous = this._hass;
+    if (previous?.user?.id && previous.user.id !== value?.user?.id) {
+      this._cleanupWebRTC();
+      this._cleanupSIPUA();
+      this._clearLocalCallState();
+      this._webrtcConfig = null;
+      this._webrtcConfigCallId = null;
+    }
     if (previous?.connection && previous.connection !== value?.connection) this._unsubscribeHAEvents();
     this._hass = value;
     if (!this._config.node_id && !this._detectedNodeId) this._autoDetectNodeId();
     if (this.isConnected) this._connectHA();
     const node = this._nodeId();
     const suffixes = ['connection', 'call_state', 'active_call', 'calls_count'];
-    const changed = !previous || previous.user?.id !== value?.user?.id ||
+    const contacts = Object.keys(value?.states || {}).filter(entity=>value.states[entity].attributes?.simson_contact);
+    const changed = !previous || previous.user?.id !== value?.user?.id || contacts.some(entity=>previous.states?.[entity] !== value.states[entity]) ||
       suffixes.some(suffix => previous.states?.[`sensor.simson_${node}_${suffix}`] !== value?.states?.[`sensor.simson_${node}_${suffix}`]);
     if (changed) this.requestUpdate();
   }
 
   _connectHA() {
     if (!this._hass) return;
+    if (!this._notificationHandoffChecked && this._hass.user?.id) {
+      const url = new URL(window.location.href);
+      const notificationNode = url.searchParams.get('simson_node');
+      if (!notificationNode || notificationNode === this._nodeId()) {
+        this._notificationHandoffChecked = true;
+        const action = url.searchParams.get('simson_action');
+        const notificationCall = url.searchParams.get('simson_call');
+        if (notificationCall && ['answer','decline'].includes(action)) {
+          for (const parameter of ['simson_action','simson_call','simson_node']) url.searchParams.delete(parameter);
+          window.history.replaceState(window.history.state, '', url);
+          if (action === 'answer') this._answer(notificationCall);
+          else this._callService('reject_call', {call_id:notificationCall,reason:'declined_from_notification'});
+        }
+        const callId = url.searchParams.get('simson_answer');
+        if (callId) {
+          this._answerPendingCallId = callId;
+          this._currentCallId = callId;
+          url.searchParams.delete('simson_answer');
+          url.searchParams.delete('simson_node');
+          window.history.replaceState(window.history.state, '', url);
+        }
+      }
+    }
     if (!this._haEventSubscribed) this._subscribeHAEvents();
     if (!this._webrtcConfig && !this._webrtcConfigPromise) this._fetchWebRTCConfig();
     if (!this._userHeartbeatInterval && this._hass.user) {

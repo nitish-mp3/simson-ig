@@ -73,7 +73,7 @@ class SimsonCardShell extends HTMLElement {
 for (const name of ['simson-relay-card', 'simson-card', 'simson-call-card']) {
   if (!customElements.get(name)) customElements.define(name, class extends SimsonCardShell {});
 }
-for (const [name, view] of [['simson-dial-card','dial'],['simson-live-call-card','live'],['simson-history-card','history'],['simson-devices-card','devices']]) {
+for (const [name, view] of [['simson-dial-card','dial'],['simson-live-call-card','live'],['simson-history-card','history'],['simson-devices-card','devices'],['simson-door-phone-card','door']]) {
   if (!customElements.get(name)) customElements.define(name, class extends SimsonCardShell {
     static defaultView = view;
     static getStubConfig() { return {type: `custom:${name}`, view}; }

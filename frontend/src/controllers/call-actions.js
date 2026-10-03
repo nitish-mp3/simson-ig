@@ -1,6 +1,8 @@
 export const withCallActions = Base => class extends Base {
-_beginOutgoingCall(remoteNode, callType) {
+_beginOutgoingCall(remoteNode, callType, remoteLabel = '') {
+    this._initiatedHere = true;
     this._currentRemoteNode = remoteNode || this._currentRemoteNode;
+    this._currentRemoteLabel = remoteLabel;
     this._currentCallType = callType || "";
     this._callStart = null;
     this._isCaller = true;
@@ -62,7 +64,7 @@ _bindAction(el, key, fn, minMs = 650) {
 _dial(nodeId, targetUserId, targetUserName) {
     if (!nodeId) return;
     const callType = this._videoEnabled ? "video" : "voice";
-    this._beginOutgoingCall(nodeId, callType);
+    this._beginOutgoingCall(nodeId, callType, targetUserName || '');
     const data = { target_node_id: nodeId, call_type: callType, caller_user_id: this._hass?.user?.id || "" };
     if (targetUserId) {
       data.target_user_id = targetUserId;
@@ -117,6 +119,9 @@ _looksLikePhoneNumber(value) {
   }
 
 _clearLocalCallState() {
+    this._initiatedHere = false;
+    if (this._currentCallId) (this._endedCallIds ||= new Set()).add(this._currentCallId);
+    this._eventCallSnapshot = null;
     clearTimeout(this._outgoingUiTimer);
     this._outgoingUiTimer = null;
     this._callStart = null;
@@ -132,8 +137,7 @@ _clearLocalCallState() {
     this._render();
   }
 
-_answer() {
-    const callId = this._activeCallAttr("call_id") || this._currentCallId;
+async _answer(callId = this._activeCallAttr("call_id") || this._currentCallId) {
     if (!callId) return;
     // Clear incoming timeout since call is being answered.
     if (this._incomingCallTimeout) {
@@ -144,15 +148,24 @@ _answer() {
     this._removePopup();
     this._dismissBrowserNotification();
     this._callStart = Date.now();
-    this._answeredByMe = true;
+    this._answeredByMe = false;
     this._answerPendingCallId = callId;
     this._currentCallId = callId;
     // Cancel any incoming suppression so the call can proceed normally
     this._incomingSuppressUntil = 0;
-    this._callService("answer_call", {
+    const result = await this._callService("answer_call", {
       call_id: callId,
       answered_by_user_id: this._hass?.user?.id || "",
     });
+    if (this._currentCallId !== callId) return;
+    if (result === false) {
+      this._answerPendingCallId = null;
+      this._answeredByMe = false;
+      this._callStart = null;
+      this._render();
+      return;
+    }
+    this._answeredByMe = true;
     // If Asterisk ConfBridge bridge ID is known, join via SIP UA
     if (this._sipBridgeId) {
       this._startSIPCall(this._sipBridgeId).catch(e => console.error("[Simson] SIP answer start:", e));
