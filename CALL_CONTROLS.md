@@ -1,6 +1,6 @@
 # Call controls and privacy
 
-Requires integration 3.3.2, addon 5.1.7 and card 5.3.2. VPS fixes are version 1.6.9.
+Requires integration 3.3.3, addon 5.1.8 and card 5.3.2. VPS fixes are version 1.6.10.
 
 ## Gateway recovery
 
@@ -11,6 +11,12 @@ data:
 ```
 
 This is a destructive recovery action: it ends channels belonging to that endpoint, including a valid call. Do not run it periodically while a call is connected. Interactive use requires an administrator; trusted automations can invoke it. Use the endpoint ID in the addon, which is normally the extension.
+
+Recovery accepts either the database endpoint ID or its extension, within the same account. It succeeds with `already_clear: true` if no channels remain; zero channels alone does not prove a hardware fault. For a stranded handset-first callback, release the source phone (for example `3101`), not an idle gateway (`1701`). `simson.hangup_call` requires an actual call ID, never a SIP extension.
+
+VPS 1.6.10 moves originate-result callbacks off the AMI reader so a gateway originate cannot block reading its own acknowledgement. Cleanup preserves real Local channel suffixes (`;1`/`;2`), follows actual bridge membership and Local siblings, and never groups channels by equal duration. Callback ring deadlines and a 20-second missing-peer grace period recover tracked automation orphans on the VPS; healthy paired calls are not ended by this watchdog. It does not replace analog disconnect supervision on a gateway that continues reporting a connected call.
+
+Handset-to-gateway automation status is sent only to the initiating node, with source/trunk and call ID. Addon 5.1.8 represents it as an observed outgoing callback for diagnostic entities, without exposing browser Answer or auto-join media controls. Older addon versions do not receive this new telemetry, to preserve privacy during rolling upgrades. Administrators can hang up these observed callbacks by exact call ID. Endpoint recovery works after the VPS update; diagnostic visibility requires the addon update.
 
 The existing `Calls Count` sensor exposes `active_calls` with call IDs, state, direction, source/target extensions, trunk, owner and timing. `simson.hangup_call` accepts an exact `call_id`. Interactive call controls enforce the authenticated user's ownership and do not fall back to somebody else's call when an ID expires.
 

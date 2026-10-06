@@ -10,6 +10,13 @@ import aiohttp
 logger = logging.getLogger(__name__)
 
 
+class SimsonApiError(aiohttp.ClientResponseError):
+    def __init__(self, response, payload):
+        self.payload = payload
+        super().__init__(response.request_info, response.history, status=response.status,
+            message=str(payload.get("error") or payload.get("message") or "Request failed"), headers=response.headers)
+
+
 class SimsonApiClient:
     """Client to communicate with the Simson addon's local REST API."""
 
@@ -90,15 +97,24 @@ class SimsonApiClient:
         for base in self._candidate_bases():
             try:
                 async with session.post(f"{base}{path}", json=data or {}) as resp:
+                    if resp.status >= 400:
+                        try:
+                            payload = await resp.json(content_type=None)
+                        except (ValueError, aiohttp.ContentTypeError):
+                            payload = None
+                        if isinstance(payload, dict) and payload.get("error"):
+                            raise SimsonApiError(resp, payload)
                     resp.raise_for_status()
                     if base != self._base:
                         logger.info("Simson addon API reachable at %s; using it for this session", base)
                         self._base = base.rstrip("/")
                     return await resp.json()
             except (aiohttp.ClientResponseError, aiohttp.ClientConnectorError, TimeoutError) as err:
+                if isinstance(err, TimeoutError):
+                    raise TimeoutError("Simson request timed out; it may have started. Check active calls before retrying.") from err
                 last_err = err
                 if isinstance(err, aiohttp.ClientResponseError):
-                    if err.status != 404:
+                    if err.status != 404 or isinstance(err, SimsonApiError):
                         raise
                     last_http_compat_err = err
         if last_err:
@@ -119,7 +135,7 @@ class SimsonApiClient:
             try:
                 return await self._post(path, data)
             except aiohttp.ClientResponseError as err:
-                if err.status != 404:
+                if err.status != 404 or isinstance(err, SimsonApiError):
                     raise
                 last_compatible_error = err
                 logger.warning(

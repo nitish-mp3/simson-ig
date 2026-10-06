@@ -238,7 +238,7 @@ hangup_call:
   fields:
     call_id:
       name: Call ID
-      description: The ID of the call to hang up. Leave blank to hang up the current active Simson call.
+      description: Actual call ID from Calls Count, not a SIP extension. To release all channels on one phone or gateway, use simson.clear_stuck_calls with its extension instead.
       required: false
       example: "550e8400-e29b-41d4-a716-446655440000"
       selector:
@@ -316,12 +316,12 @@ connect_sip_phones:
           max: 120
           mode: box
 clear_stuck_calls:
-  name: Release Gateway Calls
+  name: Release SIP Endpoint Calls
   description: Releases channels for one endpoint only. This ends any ongoing call on that endpoint. Administrator or automation access required.
   fields:
     endpoint_id:
-      name: SIP endpoint ID
-      description: Use the endpoint ID shown in the addon (usually its extension, for example 1701).
+      name: SIP endpoint ID or extension
+      description: Database endpoint ID or SIP extension, for example 3101 for the source phone or 1701 for the gateway. Already-clear endpoints succeed safely.
       required: true
       selector:
         text:

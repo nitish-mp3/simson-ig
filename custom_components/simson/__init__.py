@@ -295,6 +295,8 @@ def _register_services(hass: HomeAssistant, client: SimsonApiClient) -> None:
 
     async def authorize_call(call: ServiceCall, action: str) -> str:
         call_id = str(call.data.get("call_id", "") or "")
+        if call_id.isdigit():
+            raise HomeAssistantError(f"{call_id} is a SIP extension, not a call ID. Use simson.clear_stuck_calls with endpoint_id {call_id} to release that endpoint, or use the call ID from Calls Count.")
         user_id = call.context.user_id
         if not user_id:
             return call_id
@@ -304,6 +306,10 @@ def _register_services(hass: HomeAssistant, client: SimsonApiClient) -> None:
             selected = next((item for item in candidates if item.get("call_id") == call_id), None)
         else:
             selected = next((item for item in candidates if can_control_call(item, user_id, action)), None)
+        if selected and selected.get("state") in ("requesting", "incoming", "ringing", "active") and action == "hangup" and (selected.get("metadata") or {}).get("controller_callback"):
+            user = await hass.auth.async_get_user(user_id)
+            if user and user.is_admin:
+                return selected["call_id"]
         if not selected or not can_control_call(selected, user_id, action):
             raise HomeAssistantError("This call belongs to another user or is no longer available")
         return selected["call_id"]
