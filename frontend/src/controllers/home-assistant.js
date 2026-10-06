@@ -192,6 +192,7 @@ _onHACallStatus(event) {
 _onHAIncomingCall(event) {
     if (event.node_id && event.node_id !== this._nodeId()) return;
     const { call_id, from_node_id, from_label, call_type, target_user_id, metadata } = event;
+    if (!this._hass?.user?.id) return;
     if (target_user_id && this._hass?.user?.id && target_user_id !== this._hass.user.id) {
       this._ignoredCallId = call_id;
       return;

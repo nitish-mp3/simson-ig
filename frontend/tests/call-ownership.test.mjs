@@ -26,3 +26,20 @@ test('local dialing renders immediately despite another call occupying the share
   assert.equal(view.remoteLabel,'59330025');
   assert.equal(host._currentCallId,undefined);
 });
+
+test('cold incoming ringing state restores answer controls only for its recipient', () => {
+  const attributes={call_id:'incoming-one',direction:'incoming',target_user_id:'recipient',remote_name:'ds'};
+  let popups=0;
+  const host={_nodeId:()=> 'office',_isConnected:()=>true,_callState:()=> 'ringing',
+    _activeCallAttr:(key,fallback='')=>attributes[key]??fallback,_hass:{user:{id:'recipient'}},
+    _playRingtone:()=>{},_showIncomingPopup:()=>{popups++;},_showBrowserNotification:()=>{}};
+  const view=reconcileCall.call(host);
+  assert.equal(view.isIncoming,true);
+  assert.equal(view.isRinging,false);
+  assert.equal(host._incomingFrom,'ds');
+  assert.equal(popups,1);
+  reconcileCall.call(host);
+  assert.equal(popups,1);
+  const observer={...host,_hass:{user:{id:'observer'}},_currentCallId:null,_prevCallState:'idle'};
+  assert.equal(reconcileCall.call(observer).hasCall,false);
+});

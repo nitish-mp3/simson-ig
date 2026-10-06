@@ -8,7 +8,8 @@
   "documentation": "https://github.com/nitish-mp3/simson-ig",
   "integration_type": "service",
   "iot_class": "local_polling",
-  "version": "3.3.3",
+  "version": "3.3.4",
+  "after_dependencies": ["mobile_app"],
   "requirements": [],
   "dependencies": [
     "frontend",

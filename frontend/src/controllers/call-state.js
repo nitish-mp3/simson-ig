@@ -21,9 +21,10 @@ export function reconcileCall() {
       answered_by_user_id: answeredByUserId}, myUserId, this._currentCallId);
     const liveStates = ['incoming', 'requesting', 'ringing', 'active'];
     const provisionalOutgoing = outgoingIntentActive && (!isMyCall || !liveStates.includes(callState));
-    const effectiveCallState = provisionalOutgoing ? 'requesting' : isMyCall && (liveStates.includes(callState) && callId)
+    let effectiveCallState = provisionalOutgoing ? 'requesting' : isMyCall && (liveStates.includes(callState) && callId)
       ? (provisionalOutgoing ? 'requesting' : callState)
       : 'idle';
+    if (effectiveCallState === 'ringing' && direction === 'incoming' && !this._isCaller) effectiveCallState = 'incoming';
 
     const isIdle = effectiveCallState === "idle" || effectiveCallState === "unknown";
     const isIncoming = effectiveCallState === "incoming" && direction !== "outgoing" && !this._isCaller;
@@ -53,7 +54,7 @@ export function reconcileCall() {
     const prev = this._prevCallState;
     if (prev !== effectiveCallState) {
       this._prevCallState = effectiveCallState;
-      if (effectiveCallState === "incoming" && prev === "idle") {
+      if (effectiveCallState === "incoming") {
         // Respect the post-decline suppression window (e.g. after user hits Decline
         // on a spam call, we ignore new incoming events for 8 s).
         const suppressed = this._incomingSuppressUntil && Date.now() < this._incomingSuppressUntil;
@@ -67,7 +68,7 @@ export function reconcileCall() {
           this._currentRemoteNode = this._activeCallAttr("remote_node_id", "");
           this._isCaller = false;
           this._polite = true;
-          this._incomingFrom = this._activeCallAttr("remote_label") || this._currentRemoteNode || "Unknown";
+          this._incomingFrom = remoteLabel;
           this._incomingCallType = this._activeCallAttr("call_type") || "voice";
           this._playRingtone();
           this._showIncomingPopup();

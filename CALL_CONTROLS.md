@@ -1,6 +1,6 @@
 # Call controls and privacy
 
-Requires integration 3.3.3, addon 5.1.8 and card 5.3.2. VPS fixes are version 1.6.10.
+Requires integration 3.3.4, addon 5.1.9 and card 5.3.3. VPS fixes are version 1.6.11.
 
 ## Gateway recovery
 
@@ -67,7 +67,21 @@ title: Call the reception team
 
 Its contact entity selects the node automatically. The editor offers the available users. A dial-only card also shows a current-call banner to reopen minimized controls, without requiring a separate live-call card.
 
-For notifications while the dashboard is closed, an administrator maps each contact to **that user's** Companion phone:
+For notifications while the dashboard is closed, Simson automatically selects push-capable Android/iOS Companion registrations owned by **that HA user**. Device names are not hardcoded and other users' phones are never automatic targets. The Companion app must be registered as the recipient, with OS notification permissions enabled. Service success means submission to HA, not proof of delivery to the phone.
+
+Default Answer/Decline links open the authenticated `/simson-call` panel, independent of dashboard layout. Reopening during ringing restores incoming controls even if the original event was missed. Caller names come from the authenticated caller profile rather than the site label.
+
+Test binding without creating a call:
+
+```yaml
+action: simson.test_user_notification
+data:
+  entity_id: sensor.your_simson_user_contact
+```
+
+Users may test their own contact; administrators may test any contact. The card's Devices tab offers the same non-call test for the logged-in user. No phone produces a helpful error instead of broadcasting. Public diagnostics contain counts/status, never private mobile-app webhook IDs.
+
+An administrator may explicitly override automatic discovery (set `automatic: true` to remove an existing override, including a disabled mapping):
 
 ```yaml
 action: simson.set_user_notification_target
@@ -86,6 +100,12 @@ Cards do not automatically join existing SIP/gateway calls on dashboard load. Br
 Legacy notification actions without a verified HA user context are refused. Use the authenticated Answer/Decline links from the user notification mapping instead.
 
 Notification links follow the [Companion app's relative-dashboard URI format](https://companion.home-assistant.io/docs/notifications/actionable-notifications/). They open the dashboard rather than depending on a navigation request carrying an API bearer header. Tests cover exact-call handoff once, matching-node/user targeting, notification clearing, and preservation of existing dashboard query parameters.
+
+## Gateway 1701 findings (6 October)
+
+The 06:10:25 UTC handset callback answered 3101 and dialed `09123208334` through 1701. The gateway's own log confirms receipt and SIP 486; Asterisk recorded cause 17 and released the source and gateway channels. Physical FXO `in_use` with zero server channels is distinct from a VPS orphan. Following the user's reboot, read-only checks showed FXO1 `connected` and both SIP contacts available. No real validation calls were placed, so analog disconnect/delivery is not certified.
+
+VPS 1.6.11 preserves gateway cause 17/21 as `gateway_busy`/`gateway_rejected` instead of generic unavailable, without retrying these definitive failures. Endpoint recovery reports `hardware_checked: false`: it releases server channels, not a physical line. Busy-tone detection and polarity settings are not changed automatically; they require carrier/device-specific disconnect verification.
 
 ## 2N door phone
 

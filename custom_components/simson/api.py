@@ -178,11 +178,13 @@ class SimsonApiClient:
                         timeout_sec: int = 30,
                         target_user_id: str = "",
                         target_user_name: str = "",
-                        caller_user_id: str = "") -> dict:
+                        caller_user_id: str = "", caller_user_name: str = "") -> dict:
         if target_extension and not source_extension and str(target_id or "").strip().isdigit():
             source_extension = str(target_id).strip()
             target_id = ""
         data = {"call_type": call_type}
+        if caller_user_name:
+            data["caller_user_name"] = caller_user_name
         if target_id:
             data["target_id"] = target_id
         if phone_number:

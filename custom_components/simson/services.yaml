@@ -366,6 +366,23 @@ set_user_notification_target:
       selector:
         text:
     dashboard_path:
-      default: /lovelace/default_view
+      default: /simson-call
       selector:
         text:
+    automatic:
+      description: Restore automatic discovery of Companion phones registered as this contact's HA user; removes any manual override or disabled mapping.
+      default: false
+      selector:
+        boolean:
+
+test_user_notification:
+  name: Test User Call Notification
+  description: Sends a non-call test to this user's Companion phones. Automatic discovery uses the authenticated mobile-app owner, never other users' phones. You may test your own contact; administrators may test any contact.
+  fields:
+    entity_id:
+      name: User contact
+      required: true
+      selector:
+        entity:
+          integration: simson
+          domain: sensor

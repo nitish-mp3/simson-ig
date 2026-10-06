@@ -11,12 +11,13 @@ class FrontendRegistrationTests(unittest.IsolatedAsyncioTestCase):
         modules = {}
         for name in (
             "homeassistant", "homeassistant.components", "homeassistant.components.frontend",
-            "homeassistant.components.http", "homeassistant.components.lovelace",
+            "homeassistant.components.http", "homeassistant.components.panel_custom", "homeassistant.components.lovelace",
             "homeassistant.components.lovelace.const", "homeassistant.core",
         ):
             modules[name] = types.ModuleType(name)
         modules["homeassistant.components.frontend"].add_extra_js_url = Mock()
         modules["homeassistant.components.http"].StaticPathConfig = Mock()
+        modules["homeassistant.components.panel_custom"].async_register_panel = AsyncMock()
         modules["homeassistant.components.lovelace.const"].LOVELACE_DATA = "lovelace"
         modules["homeassistant.components.lovelace.const"].MODE_STORAGE = "storage"
         modules["homeassistant.core"].HomeAssistant = object
@@ -52,6 +53,13 @@ class FrontendRegistrationTests(unittest.IsolatedAsyncioTestCase):
         await self.frontend.async_register_card(self.hass)
         self.assertEqual(self.hass.http.async_register_static_paths.await_count, 2)
         self.resources.async_create_item.assert_awaited_once()
+
+    async def test_notification_panel_registered_once_independent_of_dashboard_resource(self):
+        await self.frontend.async_register_card(self.hass)
+        await self.frontend.async_register_card(self.hass)
+        self.frontend.async_register_panel.assert_awaited_once_with(
+            self.hass, "simson-call", "simson-call-panel", module_url=self.frontend.CARD_URL
+        )
 
     async def test_resource_failure_does_not_repeat_static_registration(self):
         self.resources.async_get_info.side_effect = [RuntimeError("not ready"), None]

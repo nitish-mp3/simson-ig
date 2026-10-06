@@ -36,7 +36,7 @@ async def test_contact_routes_to_its_own_entry_and_caller_context_cannot_be_spoo
     call.data.update(caller_user_id="impersonated", call_type="video")
     await module.start_user_call(hass, call)
     client.make_call.assert_awaited_once_with(target_node_id="office", target_user_id="recipient",
-        target_user_name="Recipient", caller_user_id="caller", call_type="video")
+        target_user_name="Recipient", caller_user_id="caller", caller_user_name="Caller", call_type="video")
     assert hass.bus.async_fire.call_args.args[1]["interactive"] is True
 
 

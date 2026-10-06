@@ -21,7 +21,6 @@ export class SimsonCard extends LitElement {
   set hass(value) {
     this._hass = value;
     this._bindSession();
-    if (this.session) this.session.hass = value;
   }
   _bindSession() {
     if (!this.isConnected || !this._hass) return;
@@ -31,6 +30,7 @@ export class SimsonCard extends LitElement {
       this.session = session;
       this.requestUpdate();
     }
+    session.hass = this._hass;
   }
   connectedCallback() { super.connectedCallback(); this._bindSession(); }
   disconnectedCallback() {

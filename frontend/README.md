@@ -7,6 +7,10 @@ Edit `src/`, not `www/`. The root `www/simson-call-card.js` and integration-serv
 
 - `entry.js`: immediately registers all supported custom-card aliases. No HA
   connection, addon API, SIP library, or device permissions are needed to register.
+- `shell.js`, `transport/runtime-loader.js`: framework-free bootstrap, bounded retries,
+  online/visibility recovery and same-origin release-manifest fallback for stale assets.
+- `panel.js`: authenticated `/simson-call` notification destination, independent of
+  a user's dashboard layout. It reuses the normal private call session.
 - `card.js`: Lit lifecycle, selective HA updates, and the main card composition.
 - `card-base.js`: configuration compatibility and initial session state.
 - `views/`: dial, active call, history, devices, per-user/door cards and recipient dialogs.
@@ -32,11 +36,12 @@ Tests use mocked Home Assistant services and local browser media. They do not pl
 telephone calls or contact the VPS. The browser suite includes actual local
 WebRTC negotiation with fake camera and microphone devices.
 
-The build emits hashed runtime chunks, copies identical assets into both release
+The two-phase build emits a self-contained bootstrap and hashed runtime chunks, copies identical assets into both release
 directories, and produces `bundle-report.json` with raw and gzip byte counts.
 The registration bundle has a hard 12 KB budget. Lit is bundled locally; no CDN
 or runtime package download is involved. Ship the entire `www` directory including
-`chunks/`. Copying only the loader file is insufficient.
+`chunks/` and `runtime.json`. Copying only the loader file is insufficient. The previous
+release's runtime assets are retained so cached mobile loaders remain usable during updates.
 
 ## Release
 
@@ -44,7 +49,7 @@ Update `src/version.js`, integration `frontend.py`, and `manifest.json` together
 Run the build and checks, then include generated assets in the release commit.
 The integration migrates its known legacy resource URLs and removes duplicate
 Simson resource entries, while preserving other cards. YAML-managed dashboards
-must use `/simson/www/simson-card.js?v=5.3.2` as a JavaScript module resource.
+must use `/simson/www/simson-card.js?v=5.3.3` as a JavaScript module resource.
 
 The call protocol and gateway routes retain their existing API contract. The
 addon Media Studio preview and the dashboard card store separate browser device

@@ -37,18 +37,17 @@ export class CallSession extends CardController {
 
   _connectHA() {
     if (!this._hass) return;
-    if (!this._notificationHandoffChecked && this._hass.user?.id) {
+    if (this._hass.user?.id) {
       const url = new URL(window.location.href);
       const notificationNode = url.searchParams.get('simson_node');
       if (!notificationNode || notificationNode === this._nodeId()) {
-        this._notificationHandoffChecked = true;
         const action = url.searchParams.get('simson_action');
         const notificationCall = url.searchParams.get('simson_call');
         if (notificationCall && ['answer','decline'].includes(action)) {
           for (const parameter of ['simson_action','simson_call','simson_node']) url.searchParams.delete(parameter);
           window.history.replaceState(window.history.state, '', url);
           if (action === 'answer') this._answer(notificationCall);
-          else this._callService('reject_call', {call_id:notificationCall,reason:'declined_from_notification'});
+          else this._runAction('Declining call…',()=>this._callService('reject_call', {call_id:notificationCall,reason:'declined_from_notification'}));
         }
         const callId = url.searchParams.get('simson_answer');
         if (callId) {

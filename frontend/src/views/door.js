@@ -38,7 +38,7 @@ export function doorView(card, host, view, renderCall) {
   const config = card._config;
   const extension = String(config.extension || '').trim();
   const camera = config.camera_entity || '';
-  const callingDoor = view.hasCall && (String(host._currentRemoteNode || '') === extension ||
+  const callingDoor = Boolean(extension) && view.hasCall && (String(host._currentRemoteNode || '') === extension ||
     host._activeCallAttr('target_extension') === extension || host._activeCallAttr('remote_node_id') === `sip:${extension}`);
   return html`<section class="door-workspace">
     <div class="section-heading"><h2>${config.device_name || 'Door phone'}</h2><span>SIP ${extension || 'not configured'}</span></div>

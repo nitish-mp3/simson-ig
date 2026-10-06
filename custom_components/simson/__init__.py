@@ -120,7 +120,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                         SERVICE_HANGUP_CALL, SERVICE_WEBRTC_SIGNAL, SERVICE_GET_TARGETS,
                         SERVICE_USER_HEARTBEAT, SERVICE_GET_REMOTE_USERS,
                         SERVICE_GET_CALL_HISTORY, SERVICE_RUN_TRIGGER,
-                        SERVICE_TRANSFER_CALL, SERVICE_CONNECT_SIP_PHONES, "clear_stuck_calls", "call_user", "set_user_notification_target"):
+                        SERVICE_TRANSFER_CALL, SERVICE_CONNECT_SIP_PHONES, "clear_stuck_calls", "call_user", "set_user_notification_target", "test_user_notification"):
                 hass.services.async_remove(DOMAIN, svc)
     return unload_ok
 
@@ -392,6 +392,8 @@ def _register_services(hass: HomeAssistant, client: SimsonApiClient) -> None:
         target_user_id = call.data.get("target_user_id", "")
         target_user_name = call.data.get("target_user_name", "")
         caller_user_id = call.context.user_id or call.data.get("caller_user_id", "")
+        caller = await hass.auth.async_get_user(caller_user_id) if caller_user_id else None
+        caller_user_name = caller.name or "User" if caller else ""
         try:
             result = await client.make_call(
                 target_node_id=target,
@@ -408,6 +410,7 @@ def _register_services(hass: HomeAssistant, client: SimsonApiClient) -> None:
                 target_user_id=target_user_id,
                 target_user_name=target_user_name,
                 caller_user_id=caller_user_id,
+                caller_user_name=caller_user_name,
             )
             logger.info("Call initiated: %s", result)
             fire_service_result(SERVICE_MAKE_CALL, result)

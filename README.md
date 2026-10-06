@@ -32,6 +32,7 @@ See [call controls and user notification setup](CALL_CONTROLS.md) for scripts, p
 | `simson.make_call` | Initiate a call | `target_node_id` or `target_id`; for outside calls use `phone_number` plus optional `trunk` such as `7009` |
 | `simson.call_user` | Call a local user contact with busy checks and private script popup | `entity_id`, optional `call_type`; unattended scripts require `caller_user_id` |
 | `simson.set_user_notification_target` | Administrator maps a contact to their phone | `entity_id`, `notify_service`, `dashboard_path` |
+| `simson.test_user_notification` | Test own (or administrator-selected) Companion phone without creating a call | `entity_id` |
 | `simson.answer_call` | Answer an incoming call | `call_id` (required) |
 | `simson.reject_call` | Reject an incoming call | `call_id` (required), `reason` (optional) |
 | `simson.hangup_call` | End an active call | `call_id` (required) |
@@ -61,7 +62,7 @@ If the card picker still only shows **Manual**, the frontend has not loaded the 
 2. Add this resource:
 
 ```
-URL: /simson/www/simson-card.js?v=5.3.2
+URL: /simson/www/simson-card.js?v=5.3.3
 Type: JavaScript Module
 ```
 

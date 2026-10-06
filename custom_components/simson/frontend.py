@@ -8,11 +8,12 @@ from pathlib import Path
 
 from homeassistant.components.frontend import add_extra_js_url
 from homeassistant.components.http import StaticPathConfig
+from homeassistant.components.panel_custom import async_register_panel
 from homeassistant.components.lovelace.const import LOVELACE_DATA, MODE_STORAGE
 from homeassistant.core import HomeAssistant
 
 _LOGGER = logging.getLogger(__name__)
-CARD_VERSION = "5.3.2"
+CARD_VERSION = "5.3.3"
 CARD_PATH = "/simson/www/simson-card.js"
 CARD_URL = f"{CARD_PATH}?v={CARD_VERSION}"
 _RESOURCE_PATHS = {CARD_PATH, "/local/simson-call-card.js", "/local/simson-card.js", "/simson/www/simson-call-card.js"}
@@ -31,6 +32,9 @@ async def async_register_card(hass: HomeAssistant) -> None:
             if not state.get("script_registered"):
                 add_extra_js_url(hass, CARD_URL)
                 state["script_registered"] = True
+            if not state.get("panel_registered"):
+                await async_register_panel(hass, "simson-call", "simson-call-panel", module_url=CARD_URL)
+                state["panel_registered"] = True
             if not state.get("resource_registered"):
                 state["resource_registered"] = await async_register_resource(hass)
     except Exception as error:
@@ -65,7 +69,7 @@ async def _retry_registration(hass: HomeAssistant, state: dict) -> None:
             await asyncio.sleep(delay)
             await async_register_card(hass)
             lovelace = hass.data.get(LOVELACE_DATA)
-            if (state.get("static_registered") and state.get("script_registered")
+            if (state.get("static_registered") and state.get("script_registered") and state.get("panel_registered")
                     and (state.get("resource_registered") or
                          (lovelace and lovelace.resource_mode != MODE_STORAGE))):
                 return

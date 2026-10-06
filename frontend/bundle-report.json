@@ -1,19 +1,11 @@
 {
   "simson-card.js": {
-    "bytes": 2662,
-    "gzip": 1242
+    "bytes": 4568,
+    "gzip": 1870
   },
-  "chunks/sip-ua-J7KWV3EN.js": {
-    "bytes": 12679,
-    "gzip": 4250
-  },
-  "chunks/card-LZMODQ4Z.js": {
-    "bytes": 86271,
-    "gzip": 23640
-  },
-  "chunks/chunk-GDU4CE5Y.js": {
-    "bytes": 30,
-    "gzip": 50
+  "chunks/card-TTIOMJCD.js": {
+    "bytes": 86801,
+    "gzip": 23754
   },
   "chunks/editor-WYFTHUGH.js": {
     "bytes": 3006,
@@ -22,5 +14,13 @@
   "chunks/chunk-KLUKP4ZZ.js": {
     "bytes": 15052,
     "gzip": 5881
+  },
+  "chunks/sip-ua-OC6QE4TU.js": {
+    "bytes": 12679,
+    "gzip": 4251
+  },
+  "chunks/chunk-XSCQEAC6.js": {
+    "bytes": 30,
+    "gzip": 50
   }
 }

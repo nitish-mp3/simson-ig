@@ -1,6 +1,7 @@
 import { html, nothing } from 'lit';
 
 export function mediaView(host) {
+  const selfContact = Object.entries(host._hass?.states || {}).find(([,state])=>state.attributes?.simson_contact && !state.attributes.simson_call_button && state.attributes.node_id===host._nodeId() && state.attributes.user_id===host._hass?.user?.id)?.[0];
   const devices = host._mediaDevices;
   const select = (label, items, property) => html`<label class="field"><span>${label}</span><select .value=${host[property]} @change=${event => {host[property]=event.target.value;host._saveMediaPreferences();if(property==='_selectedAudioOutput')host._applyAudioOutput();if(host._mediaPreviewStream)host._startMediaPreview();host.requestUpdate();}}><option value="">System default</option>${items.map((device,index) => html`<option value=${device.deviceId}>${device.label || label+' '+(index+1)}</option>`)}</select></label>`;
   return html`<section class="media-workspace"><div class="section-heading"><div><span class="eyebrow">READY WHEN YOU ARE</span><h2>Your devices</h2></div><button @click=${() => host._runAction('detect',()=>host._refreshMediaDevices(true))}>Detect</button></div>
@@ -10,5 +11,6 @@ export function mediaView(host) {
     <div class="device-grid">${select('Microphone',devices.audioInputs,'_selectedAudioInput')}${select('Camera',devices.videoInputs,'_selectedVideoInput')}${select('Speaker',devices.audioOutputs,'_selectedAudioOutput')}</div>
     <div class="call-actions"><button class="primary" ?disabled=${!navigator.mediaDevices?.getUserMedia} @click=${() => host._runAction('preview',()=>host._startMediaPreview())}>${host._mediaPreviewStream ? 'Restart preview' : 'Test devices'}</button>${host._mediaPreviewStream ? html`<button @click=${() => host._stopMediaPreview()}>Stop preview</button>` : nothing}</div><p class="fine-print">Device choices stay in this browser. Speaker selection depends on browser support.</p>
     ${host._notifPermission === 'default' ? html`<button class="text-button" @click=${() => host._requestNotificationPermission()}>Enable incoming-call notifications</button>` : nothing}
+    ${selfContact ? html`<button class="text-button" ?disabled=${Boolean(host._actionPending)} @click=${()=>host._runAction('notification-test',()=>host._callService('test_user_notification',{entity_id:selfContact}))}>Send a test to my Companion phone</button><p class="fine-print">Registered phones are matched to your HA user. Notification permissions must also be enabled on the phone.</p>` : nothing}
   </section>`;
 }

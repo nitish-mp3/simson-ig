@@ -39,7 +39,8 @@ async def start_user_call(hass, call):
                 raise HomeAssistantError(f"{target.name or 'This user'} is already in a call")
         result = await client.make_call(target_node_id=node_id,
             target_user_id=target_id, target_user_name=target.name or "User",
-            caller_user_id=caller_id, call_type=call.data.get("call_type", "voice"))
+            caller_user_id=caller_id, caller_user_name=caller.name or "User",
+            call_type=call.data.get("call_type", "voice"))
         if result.get("call_id"):
             hass.bus.async_fire("simson_user_call_started", {
                 "node_id": node_id, "call_id": result["call_id"],

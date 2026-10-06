@@ -69,6 +69,54 @@ test('registers all aliases before the runtime finishes downloading',async()=>{
   release();await page.close();
 });
 
+test('mobile bootstrap recovers a stale runtime and tolerates malformed third-party metadata',async()=>{
+  const page=await browser.newPage({viewport:{width:390,height:844}});
+  await page.addInitScript(()=>{window.customCards={invalid:true};});
+  let runtimeRequests=0;
+  await page.route('**/chunks/card-*.js*',route=>{
+    runtimeRequests++;
+    return runtimeRequests===1?route.fulfill({status:404,body:'old release removed'}):route.continue();
+  });
+  await load(page);
+  assert.equal(runtimeRequests,2);
+  assert.equal(await page.evaluate(()=>Boolean(customElements.get('simson-call-panel'))),true);
+  await page.close();
+});
+
+test('opening the mobile dashboard during ringing restores the recipient popup without an event',async()=>{
+  const page=await browser.newPage({viewport:{width:390,height:844}});await load(page);
+  await page.evaluate(()=>{
+    document.querySelector('simson-relay-card').remove();
+    window.mockHass.user={id:'recipient',name:'nitish'};
+    window.mockHass.states['sensor.simson_office_call_state']={state:'ringing',attributes:{
+      call_id:'cold-incoming',direction:'incoming',target_user_id:'recipient',remote_name:'ds',remote_label:'ds',remote_node_id:'office',call_type:'voice'}};
+    const shell=document.createElement('simson-relay-card');shell.setConfig({node_id:'office'});shell.hass=window.mockHass;
+    document.querySelector('#mount').append(shell);
+  });
+  await page.getByText('ds',{exact:true}).first().waitFor();
+  await page.getByRole('button',{name:/Answer/}).first().waitFor();
+  assert.equal(await page.evaluate(()=>window.calls.filter(call=>['make_call','answer_call','reject_call'].includes(call.service)).length),0);
+  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
+  await page.screenshot({path:path.join(integrationRoot,'frontend/test-results/incoming-mobile.png'),fullPage:true});
+  await page.close();
+});
+
+test('notification call panel consumes only the exact authenticated decline link',async()=>{
+  const page=await browser.newPage();await load(page);
+  await page.evaluate(()=>{
+    history.replaceState({},'', '/simson-call?simson_action=decline&simson_call=panel-call&simson_node=office');
+    document.querySelector('simson-relay-card').remove();
+    const panel=document.createElement('simson-call-panel');panel.hass=window.mockHass;
+    document.querySelector('#mount').append(panel);
+  });
+  await page.waitForFunction(()=>window.calls.some(call=>call.service==='reject_call'));
+  const calls=await page.evaluate(()=>window.calls.filter(call=>call.service==='reject_call'));
+  assert.equal(calls.length,1);
+  assert.equal(calls[0].data.call_id,'panel-call');
+  assert.equal(await page.evaluate(()=>document.querySelector('simson-call-panel')._card._config.node_id),'office');
+  await page.close();
+});
+
 test('cold loads consistently, keeps input and audio DOM stable on HA updates',async()=>{
   const page=await browser.newPage();const errors=[];page.on('pageerror',error=>errors.push(error.message));
   await load(page);
