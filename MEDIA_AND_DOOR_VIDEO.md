@@ -1,6 +1,10 @@
 # Media and door video
 
-Versions: VPS 1.6.14, integration 3.3.7, addon 5.1.10, card 5.3.6.
+Versions: VPS 1.6.14, integration 3.3.8, addon 5.1.10, card 5.3.7.
+
+## Canonical node identity
+
+The browser previously inferred node identity from the connection sensor's entity-ID prefix. That prefix can retain an installation slug or old device name while its `node_id` attribute reflects the actual VPS node. The authenticated media proxy deliberately rejects unknown nodes, so using a stale prefix fails configuration retrieval even though the addon can originate the call successfully. Cards now use the connection sensor's canonical `node_id` for HTTP requests, events and shared-session keys, while retaining the associated sensor names for status updates. Explicit entity selections remain supported. Unknown explicit nodes still fail closed instead of selecting another site. A regression reproduces a renamed sensor prefix with a different canonical node and verifies that split cards share a session and request the correct node. This is a confirmed code defect; the actual authenticated response for the user's 15:31:44 attempt remains unavailable, so it is not proof that this was the only failure at that installation.
 
 ## Browser media configuration recovery
 

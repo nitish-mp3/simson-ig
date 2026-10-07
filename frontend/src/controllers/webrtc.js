@@ -21,9 +21,15 @@ async _fetchWebRTCConfig() {
           this._webrtcConfigNextRetryAt = 0;
           this._webrtcConfigError = '';
           return this._webrtcConfig;
-      } catch (e) { /* fall through to defaults */ }
+      } catch (e) {
+          const status = Number(e?.status || e?.status_code || e?.body?.status || 0);
+          this._webrtcConfigError = status === 404
+            ? 'The requested Simson node was not found. Check the card node and integration instance.'
+            : status === 401 || status === 403
+              ? 'Home Assistant denied the media configuration request. Sign in again and retry.'
+              : 'Media configuration could not be loaded' + (status ? ' (HTTP '+status+')' : '') + '. Check the Home Assistant integration logs and retry.';
+      }
       this._webrtcConfigRetryCallId = callId;
-      this._webrtcConfigError = 'Relay configuration could not be loaded. Check the integration connection and retry.';
       this._webrtcConfigNextRetryAt = Date.now() + 30000;
       return { ice_servers: ICE_SERVERS, sip: { enabled: false } };
     })();

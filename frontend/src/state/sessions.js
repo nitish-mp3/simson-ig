@@ -1,4 +1,5 @@
 import { CallSession } from '../session.js';
+import { canonicalNodeId } from './node-identity.js';
 
 const connections = new WeakMap();
 
@@ -8,7 +9,8 @@ export function acquireSession(view, hass, config) {
   if (!sessions) connections.set(connection, sessions = new Map());
   const configuredNode = config.node_id || hass.states?.[config.entity]?.attributes?.node_id || [config.connection_entity, config.call_state_entity, config.calls_count_entity]
     .map(value => value?.match(/^sensor\.simson_(.+)_(?:connection|call_state|calls_count)$/)?.[1]).find(Boolean);
-  const node = configuredNode || Object.keys(hass.states || {}).map(value => value.match(/^sensor\.simson_(.+)_connection$/)?.[1]).find(Boolean) || '';
+  const prefix = configuredNode || Object.keys(hass.states || {}).map(value => value.match(/^sensor\.simson_(.+)_connection$/)?.[1]).find(Boolean) || '';
+  const node = canonicalNodeId(hass, {...config, node_id:prefix});
   const key = `${hass.user?.id || ''}:${node}`;
   let session = sessions.get(key);
   if (!session) {

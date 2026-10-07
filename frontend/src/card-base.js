@@ -160,6 +160,9 @@ setConfig(config) {
     this._config = {
       title: config.title || "Simson",
       node_id: nodeId,
+      connection_entity: config.connection_entity,
+      call_state_entity: config.call_state_entity,
+      calls_count_entity: config.calls_count_entity,
       target_nodes: targetNodes,
       pstn_trunk: String(config.pstn_trunk || "").trim(),
       video_enabled: config.video_enabled === true,

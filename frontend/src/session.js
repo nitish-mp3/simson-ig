@@ -8,6 +8,7 @@ import { withSipBridge } from './controllers/sip-bridge.js';
 import { withNotifications } from './controllers/notifications.js';
 import { withFormatting } from './shared/format.js';
 import { reconcileCall } from './controllers/call-state.js';
+import { nodeEntity } from './state/node-identity.js';
 
 const CardController = withFormatting(withNotifications(withSipBridge(withWebRTC(withMediaDevices(withCallActions(withHomeAssistant(CardBase)))))));
 
@@ -27,11 +28,10 @@ export class CallSession extends CardController {
     this._hass = value;
     if (!this._config.node_id && !this._detectedNodeId) this._autoDetectNodeId();
     if (this.isConnected) this._connectHA();
-    const node = this._nodeId();
     const suffixes = ['connection', 'call_state', 'active_call', 'calls_count'];
     const contacts = Object.keys(value?.states || {}).filter(entity=>value.states[entity].attributes?.simson_contact);
     const changed = !previous || previous.user?.id !== value?.user?.id || contacts.some(entity=>previous.states?.[entity] !== value.states[entity]) ||
-      suffixes.some(suffix => previous.states?.[`sensor.simson_${node}_${suffix}`] !== value?.states?.[`sensor.simson_${node}_${suffix}`]);
+      suffixes.some(suffix => nodeEntity(previous, this._config, this._detectedNodeId, suffix) !== this._entity(suffix));
     if (changed) this.requestUpdate();
   }
 

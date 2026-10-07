@@ -1,4 +1,5 @@
 import { ownsCall } from '../state/call-ownership.js';
+import { canonicalNodeId, nodeEntity } from '../state/node-identity.js';
 
 export const withHomeAssistant = Base => class extends Base {
 _autoDetectNodeId() {
@@ -14,7 +15,7 @@ _autoDetectNodeId() {
   }
 
 _nodeId() {
-    return this._config.node_id || this._detectedNodeId;
+    return canonicalNodeId(this._hass, this._config, this._detectedNodeId);
   }
 
 _subscribeHAEvents() {
@@ -294,7 +295,7 @@ _onHACallHistory(data) {
   }
 
 _entity(suffix) {
-    return this._hass?.states[`sensor.simson_${this._nodeId()}_${suffix}`];
+    return nodeEntity(this._hass, this._config, this._detectedNodeId, suffix);
   }
 
 _val(suffix, fallback = "unknown") {

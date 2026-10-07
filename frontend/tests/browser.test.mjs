@@ -270,6 +270,38 @@ test('dialing appears immediately and unrelated active calls never acquire media
   await page.close();
 });
 
+test('renamed sensor prefixes share a canonical-node session and request media for that node',async()=>{
+  const page=await browser.newPage();await load(page);
+  const result=await page.evaluate(async()=>{
+    document.querySelector('#mount').replaceChildren();
+    window.mediaPaths=[];
+    window.mockHass={...window.mockHass,states:{
+      'sensor.simson_install_slug_connection':{state:'connected',attributes:{node_id:'office'}},
+      'sensor.simson_install_slug_call_state':{state:'idle',attributes:{}},
+      'sensor.simson_install_slug_calls_count':{state:'0',attributes:{}},
+    },callApi:async(method,path)=>{window.mediaPaths.push(path);return {sip:{enabled:false}};}};
+    for(const node of ['install_slug','office']) {
+      const shell=document.createElement('simson-relay-card');
+      shell.setConfig({node_id:node,view:node==='office'?'live':'dial'});
+      shell.hass=window.mockHass;
+      document.querySelector('#mount').append(shell);
+    }
+    await new Promise(resolve=>setTimeout(resolve,250));
+    const hosts=[...document.querySelectorAll('#mount > *')].map(shell=>shell._card.session);
+    hosts[0]._currentCallId='owned-call';
+    hosts[0]._webrtcConfig=null;
+    hosts[0]._webrtcConfigNextRetryAt=0;
+    await hosts[0]._fetchWebRTCConfig();
+    return {same:hosts[0]===hosts[1],node:hosts[0]._nodeId(),connected:hosts[0]._isConnected(),paths:window.mediaPaths};
+  });
+  assert.equal(result.same,true);
+  assert.equal(result.node,'office');
+  assert.equal(result.connected,true);
+  assert.ok(result.paths.length>0);
+  assert.ok(result.paths.every(value=>value.includes('node_id=office')));
+  await page.close();
+});
+
 test('Mauritius card dialing preserves +230 and the explicitly selected 6202 trunk',async()=>{
   const page=await browser.newPage();await load(page);
   await page.locator('#node-input').fill('+23059330025');

@@ -13,7 +13,7 @@ from homeassistant.components.lovelace.const import LOVELACE_DATA, MODE_STORAGE
 from homeassistant.core import HomeAssistant
 
 _LOGGER = logging.getLogger(__name__)
-CARD_VERSION = "5.3.6"
+CARD_VERSION = "5.3.7"
 CARD_PATH = "/simson/www/simson-card.js"
 CARD_URL = f"{CARD_PATH}?v={CARD_VERSION}"
 _RESOURCE_PATHS = {CARD_PATH, "/local/simson-call-card.js", "/local/simson-card.js", "/simson/www/simson-call-card.js"}
