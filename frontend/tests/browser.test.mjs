@@ -405,10 +405,20 @@ test('SIP browser offer receives H264 video without acquiring the local camera',
     await client.dial('mock-conference');
     const sdp=client._pc.localDescription.sdp;
     const video=sdp.slice(sdp.indexOf('m=video'));
-    const result={video:video.includes('a=recvonly'),h264:video.includes('H264/90000'),localCamera:stream.getVideoTracks().length};
+    const media=sdp.split(/(?=m=)/).filter(section=>section.startsWith('m='));
+    const attributes=media.map(section=>section.split('\r\n').filter(line=>line.startsWith('a=')).length);
+    const unsupported=/a=rtpmap:\d+ (?:VP8|VP9|AV1|rtx)\//i.test(video);
+    const unmapped=media.flatMap(section=>section.split('\r\n')[0].split(' ').slice(3)
+      .filter(payload=>Number(payload)>=96 && !section.includes('a=rtpmap:'+payload+' ')));
+    const result={video:video.includes('a=recvonly'),h264:video.includes('H264/90000'),localCamera:stream.getVideoTracks().length,attributes,unsupported,unmapped};
     client._cleanup();return result;
   });
-  assert.deepEqual(result,{video:true,h264:true,localCamera:0});
+  assert.equal(result.video,true);
+  assert.equal(result.h264,true);
+  assert.equal(result.localCamera,0);
+  assert.equal(result.unsupported,false);
+  assert.deepEqual(result.unmapped,[]);
+  assert.ok(result.attributes.every(count=>count<=64),JSON.stringify(result.attributes));
   await page.close();
 });
 

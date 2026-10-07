@@ -49,7 +49,7 @@ Update `src/version.js`, integration `frontend.py`, and `manifest.json` together
 Run the build and checks, then include generated assets in the release commit.
 The integration migrates its known legacy resource URLs and removes duplicate
 Simson resource entries, while preserving other cards. YAML-managed dashboards
-must use `/simson/www/simson-card.js?v=5.3.7` as a JavaScript module resource.
+must use `/simson/www/simson-card.js?v=5.3.8` as a JavaScript module resource.
 
 The call protocol and gateway routes retain their existing API contract. The
 addon Media Studio preview and the dashboard card store separate browser device

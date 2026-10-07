@@ -1,6 +1,14 @@
 # Media and door video
 
-Versions: VPS 1.6.14, integration 3.3.8, addon 5.1.10, card 5.3.7.
+Versions: VPS 1.6.15, integration 3.3.9, addon 5.1.11, card 5.3.8.
+
+## Browser SIP 400 and Supervisor 502
+
+The 15:52:16 IST call reached 1605 and answered. Its browser join subsequently failed. Asterisk logged `PJ_ETOOMANY` while discarding SDP attributes, followed by `PJMEDIA_SDP_EMISSINGRTPMAP` and SIP 400. A Chrome regression reproduced 98 video-media attributes even after restricting the offer to every H.264 variant. The SIP UA now offers only PCMU/PCMA audio and a single supported H.264 profile, preferring constrained baseline with packetization mode 1. Tests verify a receive-only video offer, no local camera capture, no unsupported video codec/RTX payloads, valid dynamic payload mappings and at most 64 attributes per media section. This applies only to the SIP UA, not node/user peer-to-peer video. SIP Content-Length uses UTF-8 byte length; password-derived digest debug output has been removed.
+
+The addon's Supervisor `/core/api` requests separately return 502 for HA events and states. That is not the SIP 400 and does not show that TURN is missing. Integration 3.3.9 consumes the existing addon SSE stream from Core and publishes recognized call/incoming/WebRTC events natively, with initial node validation, targeted-user metadata, bounded decoding, deduplication against successful Supervisor events, reconnect backoff and unload cleanup. Addon 5.1.11 supplies idle keepalives and exact target-user fields. Existing polling remains active. This provides an alternate event path; it does not repair or silence the underlying Supervisor proxy error, and it does not retry notification/service POSTs. Inspect Supervisor's Core-proxy logs and configured internal Core address to repair that path rather than assuming its port, TLS or credentials.
+
+The codec-offer/parser and event-relay regressions pass in synthetic tests. No real telephone call was placed. These changes do not certify decoded physical-device video through the legacy Local/ConfBridge topology; that remains a separate limitation.
 
 ## Canonical node identity
 

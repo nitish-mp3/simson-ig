@@ -22,6 +22,7 @@ from aiohttp import web
 from .api import SimsonApiClient
 from .call_access import can_control_call
 from .client_selection import client_for_node
+from .event_stream import setup_event_stream
 from .user_notifications import async_setup_user_notifications
 from .user_calls import start_user_call
 from .frontend import async_register_card as _async_register_card
@@ -94,6 +95,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         hass.http.register_view(WebRTCConfigView(client, hass))
         _register_call_action_view(hass)
         _register_mobile_notification_actions(hass, entry, client)
+        hass.data[DOMAIN][entry.entry_id]["event_stream_task"] = setup_event_stream(hass, entry, client, coordinator)
 
     except Exception:
         await client.close()
@@ -109,6 +111,12 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     )
     if unload_ok:
         data = hass.data[DOMAIN].pop(entry.entry_id, None)
+        if data and data.get("event_stream_task"):
+            data["event_stream_task"].cancel()
+            try:
+                await data["event_stream_task"]
+            except asyncio.CancelledError:
+                pass
         if data and "client" in data:
             await data["client"].close()
         if data and data.get("notification_unsub"):

@@ -127,7 +127,7 @@ export class MinimalSIPUA {
     const via    = `SIP/2.0/WS ${this._domain()};branch=z9hG4bK${this._rand()};rport`;
     const from   = `<${this._uri}>;tag=${this._tag}`;
     const to     = `<${toUri || targetUri}>`;
-    const ctLen  = body ? `Content-Type: application/sdp\r\nContent-Length: ${body.length}` : "Content-Length: 0";
+    const ctLen  = body ? `Content-Type: application/sdp\r\nContent-Length: ${new TextEncoder().encode(body).length}` : "Content-Length: 0";
     return `${method} ${targetUri} SIP/2.0\r\n` +
       `Via: ${via}\r\n` +
       `Max-Forwards: 70\r\n` +
@@ -142,7 +142,7 @@ export class MinimalSIPUA {
   }
 
   _buildResponse(code, phrase, from, to, callId, via, cseq, body = "") {
-    const ctLen = body ? `Content-Type: application/sdp\r\nContent-Length: ${body.length}` : "Content-Length: 0";
+    const ctLen = body ? `Content-Type: application/sdp\r\nContent-Length: ${new TextEncoder().encode(body).length}` : "Content-Length: 0";
     return `SIP/2.0 ${code} ${phrase}\r\n` +
       `Via: ${via}\r\n` +
       `From: ${from}\r\n` +
@@ -351,11 +351,17 @@ export class MinimalSIPUA {
         const mime = String(c.mimeType || "").toLowerCase();
         return (mime === "audio/pcmu" || mime === "audio/pcma") && c.clockRate === 8000;
       });
-      if (!pcm.length) return;
+      const video = globalThis.RTCRtpReceiver?.getCapabilities?.('video')?.codecs?.filter(codec =>
+        String(codec.mimeType || '').toLowerCase() === 'video/h264' && codec.clockRate === 90000) || [];
+      const h264 = video.find(codec => /packetization-mode=1(?:;|$)/.test(codec.sdpFmtpLine || '') &&
+        /profile-level-id=42e0/i.test(codec.sdpFmtpLine || '')) ||
+        video.find(codec => /packetization-mode=1(?:;|$)/.test(codec.sdpFmtpLine || '')) || video[0];
       for (const tx of this._pc.getTransceivers()) {
-        if (tx.sender?.track?.kind === "audio" && tx.setCodecPreferences) {
+        if (pcm.length && (tx.sender?.track?.kind === "audio" || tx.receiver?.track?.kind === "audio") && tx.setCodecPreferences) {
           tx.setCodecPreferences(pcm);
           console.log("[Simson SIPua] codec preference:", pcm.map(c => c.mimeType).join(", "));
+        } else if (tx.receiver?.track?.kind === 'video' && tx.setCodecPreferences && h264) {
+          tx.setCodecPreferences([h264]);
         }
       }
     } catch (e) {
@@ -389,7 +395,6 @@ export class MinimalSIPUA {
     }
     if (opaque) aHdr += `,opaque="${opaque}"`;
     const authLine = (code === 401 ? "Authorization" : "Proxy-Authorization") + ": " + aHdr;
-    console.log("[Simson SIPua] Digest debug: realm=", realm, "nonce=", nonce, "qop=", qop, "opaque=", opaque, "ha1=", ha1, "ha2=", ha2, "resp=", resp);
     if (method === "REGISTER") {
       this._send(this._buildRequest("REGISTER", "sip:" + this._domain(), this._regCallId,
         this._cseq++, "Expires: 3600\r\n" + authLine + "\r\n", "", this._uri));

@@ -62,7 +62,7 @@ If the card picker still only shows **Manual**, the frontend has not loaded the 
 2. Add this resource:
 
 ```
-URL: /simson/www/simson-card.js?v=5.3.7
+URL: /simson/www/simson-card.js?v=5.3.8
 Type: JavaScript Module
 ```
 
@@ -93,7 +93,7 @@ Check these in order:
 1. **Downloaded is not enough**: add **Simson Call Relay** from **Settings -> Devices & Services -> Add Integration**.
 2. Confirm the addon is running and reachable at the URL entered during setup.
 3. Open `/simson/www/simson-card.js` in the HA browser. If it returns 404, the integration is not loaded.
-4. Use `/simson/www/simson-card.js?v=5.3.7` as the single Simson Dashboard Resource (JavaScript module), then reload the dashboard. Install the complete integration `www` directory, including its chunks; replacing only the loader is insufficient. The card footer must show `v5.3.7`. A VPS update does not update the Home Assistant integration or its card assets.
+4. Use `/simson/www/simson-card.js?v=5.3.8` as the single Simson Dashboard Resource (JavaScript module), then reload the dashboard. Install the complete integration `www` directory, including its chunks; replacing only the loader is insufficient. The card footer must show `v5.3.8`. A VPS update does not update the Home Assistant integration or its card assets.
 
 ## SIP Phone / Landline Routing
 
