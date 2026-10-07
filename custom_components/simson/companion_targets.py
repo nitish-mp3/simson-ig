@@ -7,7 +7,12 @@ def select_user_devices(registrations, user_id, supports_push):
         data = entry.data
         if data.get("user_id") != user_id or getattr(entry, "disabled_by", None):
             continue
-        if str(data.get("os_name", "")).lower() not in ("android", "ios") or not supports_push(webhook_id):
+        if str(data.get("os_name", "")).lower() not in ("android", "ios"):
+            continue
+        try:
+            if not supports_push(webhook_id):
+                continue
+        except (KeyError, AttributeError, TypeError):
             continue
         identity = data.get("device_id") or webhook_id
         if identity in known_devices:

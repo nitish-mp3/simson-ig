@@ -48,24 +48,29 @@ async _startSIPCall(bridgeId) {
       return;
     }
     const uri = "sip:" + sip.username + "@" + sip.domain;
-    this._sipUA = new MinimalSIPUA({
+    const ua = new MinimalSIPUA({
       uri,
       captureMedia: () => this._captureMedia(false),
       password: sip.password,
       wsUrl: sip.ws_url,
       iceServers: cfg.ice_servers || ICE_SERVERS,
       onAudioTrack: (stream, track) => {
+        if(this._sipUA!==ua)return;
         this._attachRemoteAudio(stream, track);
       },
       onRegistered: () => {
-        this._sipUA._activeBridge = bridgeId;
+        if(this._sipUA!==ua)return;
+        ua._activeBridge = bridgeId;
         this._pendingSIPBridgeId = null;
-        this._sipUA.dial(bridgeId).catch(e => {
+        ua.dial(bridgeId).catch(e => {
+          if(this._sipUA!==ua)return;
           console.error("Simson SIP dial error:", e);
           this._cleanupSIPUA();
         });
       },
       onError: (e) => {
+        if(this._sipUA!==ua)return;
+        this._mediaDeviceError='The media connection failed. '+(e?.message || 'Phone audio is unavailable; retry the media connection.');
         console.error("Simson SIP UA error:", e);
         this._pendingSIPBridgeId = null;
         this._cleanupSIPUA();
@@ -73,11 +78,13 @@ async _startSIPCall(bridgeId) {
         this._render();
       },
       onBye: () => {
+        if(this._sipUA!==ua)return;
         this._cleanupSIPUA();
         console.warn("[Simson SIP] Browser bridge leg ended; waiting for VPS/Asterisk call status.");
         this._render();
       },
     });
-    this._sipUA.connect();
+    this._sipUA=ua;
+    ua.connect();
   }
 };

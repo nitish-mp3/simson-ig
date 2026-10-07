@@ -70,8 +70,11 @@ export class MinimalSIPUA {
       this._onError && this._onError(new Error("SIP not registered"));
       return;
     }
+    const generation=this._callGeneration=(this._callGeneration || 0)+1;
     try {
-      this._localStream = await this._captureMedia();
+      const stream = await this._captureMedia();
+      if(generation!==this._callGeneration || this._intentionalClose){stream.getTracks().forEach(track=>track.stop());return;}
+      this._localStream=stream;
     } catch (e) {
       this._onError && this._onError(e);
       return;
@@ -86,11 +89,13 @@ export class MinimalSIPUA {
     this._pc.onicegatheringstatechange = () => console.log("[Simson SIPua] ICE gathering:", this._pc?.iceGatheringState);
     this._pc.onicecandidate = (ev) => { if (ev.candidate) console.log("[Simson SIPua] ICE candidate:", ev.candidate.candidate.slice(0, 80)); };
     for (const t of this._localStream.getAudioTracks()) this._pc.addTrack(t, this._localStream);
+    this._pc.addTransceiver('video', {direction:'recvonly'});
     this._preferPcmCodecs();
 
     const offer = await this._pc.createOffer();
     await this._pc.setLocalDescription(offer);
     await this._waitICE();
+    if(generation!==this._callGeneration || !this._pc || this._intentionalClose)return;
 
     this._callId = this._rand(16) + "@" + this._domain();
     this._lastAck = null;
@@ -384,7 +389,6 @@ export class MinimalSIPUA {
     }
     if (opaque) aHdr += `,opaque="${opaque}"`;
     const authLine = (code === 401 ? "Authorization" : "Proxy-Authorization") + ": " + aHdr;
-    console.log("[Simson SIPua] Digest auth →", authLine);
     console.log("[Simson SIPua] Digest debug: realm=", realm, "nonce=", nonce, "qop=", qop, "opaque=", opaque, "ha1=", ha1, "ha2=", ha2, "resp=", resp);
     if (method === "REGISTER") {
       this._send(this._buildRequest("REGISTER", "sip:" + this._domain(), this._regCallId,
@@ -404,15 +408,18 @@ export class MinimalSIPUA {
   _waitICE() {
     return new Promise((resolve) => {
       if (!this._pc || this._pc.iceGatheringState === "complete") { resolve(); return; }
-      const done = () => { if (this._pc?.iceGatheringState === "complete") resolve(); };
-      this._pc.addEventListener("icegatheringstatechange", done);
-      setTimeout(resolve, 4000); // max wait
+      const peer=this._pc;
+      const finish=()=>{clearTimeout(timer);peer.removeEventListener('icegatheringstatechange',done);resolve();};
+      const done=()=>{if(peer.iceGatheringState==='complete' || peer.connectionState==='closed')finish();};
+      const timer=setTimeout(finish,10000);
+      peer.addEventListener('icegatheringstatechange',done);
     });
   }
 
   // ── Cleanup ───────────────────────────────────────────────────
 
   _cleanup() {
+    this._callGeneration=(this._callGeneration || 0)+1;
     if (this._regInterval) { clearInterval(this._regInterval); this._regInterval = null; }
     if (this._pc) { this._pc.close(); this._pc = null; }
     if (this._localStream) { this._localStream.getTracks().forEach(t => t.stop()); this._localStream = null; }

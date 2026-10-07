@@ -2,10 +2,10 @@ import { html, nothing } from 'lit';
 
 export function callView(host, view) {
   const localVideo = Boolean(host._localStream?.getVideoTracks().length);
-  const remoteVideo = Boolean(host._remoteStream?.getVideoTracks().length);
-  const video = view.isActive && (localVideo || remoteVideo);
+  const remoteVideo = Boolean(host._remoteStream?.getVideoTracks().some(track=>track.readyState==='live'&&!track.muted));
+  const video = view.isActive && (localVideo || Boolean(host._remoteStream?.getVideoTracks().length));
   const isSipCall = view.activeCallType === 'sip' || host._currentCallType === 'sip';
-  const mediaConnected = isSipCall ? Boolean(host._sipUA?._activeBridge) : host._pc?.connectionState === 'connected';
+  const mediaConnected = isSipCall ? host._sipUA?._pc?.connectionState === 'connected' : host._pc?.connectionState === 'connected';
   const incomingVideo = ['video', 'webrtc-video'].includes(host._incomingCallType || view.activeCallType);
   const mediaFailed = host._mediaDeviceError?.startsWith('The media connection failed.');
   const statusText = view.isActive ? (mediaFailed ? 'Media connection failed' : mediaConnected ? 'Connected' : 'Connecting media…') : view.isIncoming ? (incomingVideo ? 'Incoming video call' : 'Would like to talk to you') : view.callId ? 'Ringing · Waiting for an answer…' : 'Sending your call request to the node…';
@@ -17,6 +17,8 @@ export function callView(host, view) {
     ${!view.isActive && !view.isIncoming ? html`<div class="call-setup-status" role="status"><span class="call-setup-spinner"></span><span><b>${view.callId ? 'The destination is being called' : 'Connecting to your call service'}</b><small>${view.callId ? 'You can stay here while the other phone rings.' : 'This card will update as soon as the node responds.'}</small></span></div>` : nothing}
     ${host._micAllowed === false ? html`<div class="notice error">Microphone unavailable. Allow microphone access in your browser to speak.</div>` : nothing}
     ${host._mediaDeviceError ? html`<div class="notice error" role="status">${host._mediaDeviceError}</div>` : nothing}
+    ${view.isActive && host._playbackBlocked ? html`<button class="primary" @click=${act('enable-sound',async()=>{await host._remoteAudio.play();host._playbackBlocked=false;host._render();})}>Enable call sound</button>` : nothing}
+    ${view.isActive && mediaFailed && (host._initiatedHere || host._answeredByMe) ? html`<button class="primary" @click=${act('retry-media',()=>{host._webrtcConfig=null;host._webrtcConfigNextRetryAt=0;return isSipCall?host._startSIPCall(host._sipBridgeId || view.activeSipBridgeId):host._startWebRTC();})}>Retry media connection</button>` : nothing}
     ${host._isCaller && !host._initiatedHere && !isSipCall ? html`<div class="browser-join"><p>This call was started by a script or another dashboard. Choose this browser to use its microphone and camera.</p><button class="primary" @click=${act('join-browser',()=>host._joinUserCall())}>Use this browser for audio${host._currentCallType === 'video' ? ' & video' : ''}</button></div>` : nothing}
     <div class="call-actions">
       ${view.isIncoming ? html`<button class="primary" ?disabled=${Boolean(host._actionPending)} @click=${act('answer', () => host._answer())}>Answer</button><button class="danger" ?disabled=${Boolean(host._actionPending)} @click=${act('reject', () => host._reject())}>Decline</button>` : html`

@@ -62,7 +62,7 @@ If the card picker still only shows **Manual**, the frontend has not loaded the 
 2. Add this resource:
 
 ```
-URL: /simson/www/simson-card.js?v=5.3.3
+URL: /simson/www/simson-card.js?v=5.3.4
 Type: JavaScript Module
 ```
 

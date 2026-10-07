@@ -102,7 +102,7 @@ export function reconcileCall() {
         }
       } else if (effectiveCallState === "idle" && prev !== "idle") {
         this._stopRingtone(); this._removePopup(); this._dismissBrowserNotification();
-        this._cleanupWebRTC();
+        this._cleanupWebRTC({endCall:true});
         this._callStart = null; this._currentCallId = null; this._currentCallType = "";
         this._currentRemoteNode = null; this._ignoredCallId = null;
         this._isCaller = false; this._outgoingIntentAt = 0;

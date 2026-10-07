@@ -20,6 +20,7 @@ from aiohttp import web
 
 from .api import SimsonApiClient
 from .call_access import can_control_call
+from .client_selection import client_for_node
 from .user_notifications import async_setup_user_notifications
 from .user_calls import start_user_call
 from .frontend import async_register_card as _async_register_card
@@ -89,7 +90,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         await async_setup_user_notifications(hass, entry, coordinator)
 
         # Expose /api/webrtc-config so the Lovelace card can fetch SIP credentials.
-        hass.http.register_view(WebRTCConfigView(client))
+        hass.http.register_view(WebRTCConfigView(client, hass))
         _register_call_action_view(hass)
         _register_mobile_notification_actions(hass, entry, client)
 
@@ -165,15 +166,19 @@ class WebRTCConfigView(HomeAssistantView):
     name = "api:webrtc-config"
     requires_auth = True
 
-    def __init__(self, client: SimsonApiClient) -> None:
+    def __init__(self, client: SimsonApiClient, hass: HomeAssistant) -> None:
         self._client = client
+        self._hass = hass
 
     async def get(self, request: web.Request) -> web.Response:
         try:
-            data = await self._client.webrtc_config()
+            client = client_for_node(self._hass, self._client, str(request.query.get("node_id") or ""))
+            if client is None:
+                return web.json_response({"error": "Simson node is unavailable"}, status=404)
+            data = await client.webrtc_config()
             user = request.get("hass_user")
             call_id = str(request.query.get("call_id") or "")
-            calls_data = await self._client.calls() if call_id else {}
+            calls_data = await client.calls() if call_id else {}
             selected = next((item for item in calls_data.get("calls", []) if item.get("call_id") == call_id), None)
             if not user or not can_control_call(selected, user.id, "signal"):
                 data = {**data, "sip": {"enabled": False}}

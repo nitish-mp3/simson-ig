@@ -1,8 +1,9 @@
 import { ICE_SERVERS } from '../transport/ice.js';
+import { authenticatedGet } from '../transport/ha-api.js';
 export const withWebRTC = Base => class extends Base {
 async _fetchWebRTCConfig() {
     const callId = this._currentCallId || '';
-    if (this._webrtcConfig && this._webrtcConfigCallId === callId) return this._webrtcConfig;
+    if (this._webrtcConfig && this._webrtcConfigCallId === callId && (!this._webrtcConfigFetchedAt || Date.now()-this._webrtcConfigFetchedAt<60000)) return this._webrtcConfig;
     if (this._webrtcConfigPromise) {
       if (this._webrtcConfigPromiseCallId === callId) return this._webrtcConfigPromise;
       await this._webrtcConfigPromise;
@@ -14,25 +15,21 @@ async _fetchWebRTCConfig() {
     this._webrtcConfigPromiseCallId = callId;
     this._webrtcConfigPromise = (async () => {
       try {
-        const token = this._hass?.auth?.data?.access_token;
-        const resp = await fetch('/api/webrtc-config?call_id=' + encodeURIComponent(callId), {
-          headers: token ? { Authorization: "Bearer " + token } : {},
-          signal: AbortSignal.timeout(8000),
-        });
-        if (resp.ok) {
-          this._webrtcConfig = await resp.json();
+          this._webrtcConfig = await authenticatedGet(this._hass,'webrtc-config?call_id='+encodeURIComponent(callId)+'&node_id='+encodeURIComponent(this._nodeId?.() || ''));
+          this._webrtcConfigFetchedAt = Date.now();
           this._webrtcConfigCallId = callId;
           this._webrtcConfigNextRetryAt = 0;
+          this._webrtcConfigError = '';
           return this._webrtcConfig;
-        }
       } catch (e) { /* fall through to defaults */ }
       this._webrtcConfigRetryCallId = callId;
+      this._webrtcConfigError = 'Relay configuration could not be loaded. Check the integration connection and retry.';
       this._webrtcConfigNextRetryAt = Date.now() + 30000;
       return { ice_servers: ICE_SERVERS, sip: { enabled: false } };
     })();
     try {
       const config = await this._webrtcConfigPromise;
-      this._turnAvailable = this._hasTurnRelay(config);
+      this._turnAvailable = this._webrtcConfigError ? undefined : this._hasTurnRelay(config);
       if (this.isConnected) this._render();
       return config;
     } finally {
@@ -78,11 +75,11 @@ async _startWebRTC() {
     const [wrtcCfg] = await Promise.all([this._fetchWebRTCConfig(), mediaPromise]);
     if (generation !== this._rtcGeneration || !this.isConnected) return;
     const iceServers = Array.isArray(wrtcCfg.ice_servers) ? wrtcCfg.ice_servers : ICE_SERVERS;
-    this._turnAvailable = this._hasTurnRelay({ ice_servers: iceServers });
+    this._turnAvailable = this._webrtcConfigError ? undefined : this._hasTurnRelay({ ice_servers: iceServers });
 
     if (generation !== this._rtcGeneration || !this.isConnected) return;
     this._pc = new RTCPeerConnection({ iceServers });
-    this._pendingCandidates = [];
+    this._pendingCandidates ||= [];
     this._makingOffer = false;
 
     // CALLER adds tracks immediately → triggers onnegotiationneeded → creates offer.
@@ -142,7 +139,7 @@ async _startWebRTC() {
           return;
         }
         this._audioQuality = 0;
-        this._mediaDeviceError = this._turnAvailable
+        this._mediaDeviceError = this._webrtcConfigError ? 'The media connection failed. Relay configuration was unavailable; reload the integration connection and retry.' : this._turnAvailable
           ? "The media connection failed. Check network/firewall access and try again."
           : "The media connection failed. This server has no TURN relay; restrictive networks need coturn enabled.";
         this._cleanupWebRTC();
@@ -180,9 +177,10 @@ async _handleWebRTCSignal(event) {
       if (!this._pc) await this._startWebRTC();
       if (!this._pc) return;
 
-      const collision = (this._makingOffer || this._pc.signalingState !== "stable");
+      const collision = this._makingOffer || (this._pc.signalingState !== "stable" && !this._isSettingRemoteAnswerPending);
+      this._ignoreOffer = collision && !this._polite;
+      if (this._ignoreOffer) return;
       if (collision) {
-        if (!this._polite) return;
         await this._pc.setLocalDescription({ type: "rollback" });
       }
 
@@ -208,7 +206,9 @@ async _handleWebRTCSignal(event) {
 
     } else if (signal_type === "answer") {
       if (this._pc && this._pc.signalingState === "have-local-offer") {
-        await this._pc.setRemoteDescription(new RTCSessionDescription(data));
+        this._isSettingRemoteAnswerPending = true;
+        try { await this._pc.setRemoteDescription(new RTCSessionDescription(data)); }
+        finally { this._isSettingRemoteAnswerPending = false; }
         for (const c of this._pendingCandidates) {
           await this._pc.addIceCandidate(new RTCIceCandidate(c));
         }
@@ -216,7 +216,8 @@ async _handleWebRTCSignal(event) {
       }
     } else if (signal_type === "ice-candidate") {
       if (this._pc && this._pc.remoteDescription) {
-        await this._pc.addIceCandidate(new RTCIceCandidate(data));
+        try { await this._pc.addIceCandidate(new RTCIceCandidate(data)); }
+        catch(error) { if (!this._ignoreOffer) throw error; }
       } else {
         this._pendingCandidates.push(data);
       }
@@ -232,7 +233,7 @@ _sendWebRTCSignal(signalType, data) {
     }).catch(e => console.error("Simson: signal send failed:", e));
   }
 
-_cleanupWebRTC() {
+_cleanupWebRTC({endCall=false}={}) {
     this._rtcGeneration = (this._rtcGeneration || 0) + 1;
     this._startingWebRTC = false;
     if (this._statsInterval) { clearInterval(this._statsInterval); this._statsInterval = null; }
@@ -244,6 +245,7 @@ _cleanupWebRTC() {
     this._remoteAudio.pause();
     this._remoteAudio.srcObject = null;
     this._remoteStream = null;
+    this._playbackBlocked = false;
     this._pendingOffer = null;
     this._makingOffer = false;
     this._muted = false;
@@ -251,9 +253,9 @@ _cleanupWebRTC() {
     this._audioQuality = 3;
     this._connectionType = "";
     this._pendingCandidates = [];
-    this._isCaller = false;
-    this._answeredByMe = false;
-    this._answerPendingCallId = null;
+    this._ignoreOffer = false;
+    this._isSettingRemoteAnswerPending = false;
+    if(endCall){this._isCaller=false;this._answeredByMe=false;this._answerPendingCallId=null;this._initiatedHere=false;}
     this._iceRestartAttempts = 0;
     // Tear down SIP UA if active (SIP phone call path)
     this._cleanupSIPUA();
@@ -269,6 +271,7 @@ _attachRemoteMedia(stream, track = null) {
       stream.addTrack(track);
     }
     if (!stream) return;
+    for(const mediaTrack of stream.getVideoTracks?.() || [])mediaTrack.addEventListener('unmute',()=>this._render(),{once:true});
     this._remoteStream = stream;
     this._remoteAudio.autoplay = true;
     this._remoteAudio.muted = false;
@@ -280,7 +283,9 @@ _attachRemoteMedia(stream, track = null) {
       states: audioTracks.map(t => t.readyState),
       muted: audioTracks.map(t => t.muted),
     });
-    this._remoteAudio.play().catch(e => {
+    this._remoteAudio.play().then(()=>{this._playbackBlocked=false;}).catch(e => {
+      this._playbackBlocked=true;
+      this._render();
       console.warn("[Simson] remote audio play blocked/failed:", e?.message || e);
     });
     this._attachMediaElements();

@@ -361,6 +361,25 @@ test('door card does not start calls or live streaming on page load',async()=>{
   await page.close();
 });
 
+test('SIP browser offer receives H264 video without acquiring the local camera',async()=>{
+  const page=await browser.newPage();await load(page);
+  const result=await page.evaluate(async()=>{
+    const manifest=await (await fetch('/simson/www/runtime.json')).json();
+    const source=manifest.assets.find(asset=>asset.includes('sip-ua-'));
+    const {MinimalSIPUA}=await import('/simson/www/'+source);
+    const stream=await navigator.mediaDevices.getUserMedia({audio:true,video:false});
+    const client=new MinimalSIPUA({uri:'sip:test@example.invalid',iceServers:[],captureMedia:async()=>stream});
+    client._registered=true;client._send=()=>{};
+    await client.dial('mock-conference');
+    const sdp=client._pc.localDescription.sdp;
+    const video=sdp.slice(sdp.indexOf('m=video'));
+    const result={video:video.includes('a=recvonly'),h264:video.includes('H264/90000'),localCamera:stream.getVideoTracks().length};
+    client._cleanup();return result;
+  });
+  assert.deepEqual(result,{video:true,h264:true,localCamera:0});
+  await page.close();
+});
+
 test('door camera retains its native HA card through camera mode changes',async()=>{
   const page=await browser.newPage();await load(page);
   await page.evaluate(()=>{
@@ -427,5 +446,36 @@ for (const sameNode of [false,true]) test(`${sameNode ? 'two users on one node' 
     return{kinds,ended:tracks.every(track=>track.readyState==='ended'),errors:window.signalErrors};
   });
   assert.deepEqual(result,{kinds:[['audio','video'],['audio','video']],ended:true,errors:[]});
+  await page.close();
+});
+
+test('both users can add cameras during an established voice call without losing audio',async()=>{
+  const page=await browser.newPage();await load(page);
+  await page.evaluate(async()=>{
+    const first=document.querySelector('simson-relay-card')._card.session;
+    const second=document.createElement('simson-call-session');second.setConfig({node_id:'studio'});document.body.append(second);
+    window.peers=[first,second];window.signalErrors=[];
+    for(const [index,peer] of window.peers.entries()) {
+      peer._render=()=>{};peer._hass={...window.mockHass,user:{id:`user${index+1}`}};
+      peer._isCaller=index===0;peer._polite=index!==0;peer._answeredByMe=index!==0;peer._initiatedHere=index===0;
+      peer._currentCallType='voice';peer._currentCallId='upgrade';peer._currentRemoteNode=index===0?'studio':'office';
+      peer._fetchWebRTCConfig=async()=>({ice_servers:[]});
+      peer._sendWebRTCSignal=(signal_type,data)=>window.peers[1-index]._handleWebRTCSignal({call_id:'upgrade',signal_type,data})
+        .catch(error=>window.signalErrors.push(error.message));
+    }
+    await second._startWebRTC();await first._startWebRTC();
+  });
+  await page.waitForFunction(()=>window.peers.every(peer=>peer._pc?.connectionState==='connected'));
+  await page.evaluate(()=>Promise.all(window.peers.map(peer=>peer._enableCamera())));
+  await page.waitForFunction(async()=>{
+    for(const peer of window.peers) {
+      const stats=await peer._pc.getStats();
+      if(![...stats.values()].some(stat=>stat.type==='inbound-rtp'&&stat.kind==='video'&&stat.framesDecoded>0))return false;
+      if(![...stats.values()].some(stat=>stat.type==='inbound-rtp'&&stat.kind==='audio'&&stat.packetsReceived>0))return false;
+    }
+    return true;
+  },null,{timeout:15000});
+  assert.deepEqual(await page.evaluate(()=>window.signalErrors),[]);
+  await page.evaluate(()=>window.peers.forEach(peer=>peer._cleanupWebRTC()));
   await page.close();
 });

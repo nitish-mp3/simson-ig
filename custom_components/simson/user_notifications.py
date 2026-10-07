@@ -120,6 +120,8 @@ async def async_setup_user_notifications(hass, entry, coordinator):
             error_message = ""
             if not service:
                 status = "not_configured" if incoming else "cleared"
+                if incoming:
+                    error_message = "Notifications disabled for this contact" if user_id in targets else "No push-capable Companion registration belongs to this HA user; register the phone as the recipient or ask an administrator to map its notify service."
             else:
                 label = metadata.get("caller_user_name") or payload.get("from_label")
                 caller_id = metadata.get("caller_user_id")

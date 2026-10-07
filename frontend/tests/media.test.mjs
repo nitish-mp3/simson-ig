@@ -4,11 +4,50 @@ import { withMediaDevices } from '../src/controllers/media-devices.js';
 import { withHomeAssistant } from '../src/controllers/home-assistant.js';
 import { withCallActions } from '../src/controllers/call-actions.js';
 import { withWebRTC } from '../src/controllers/webrtc.js';
+import { authenticatedGet } from '../src/transport/ha-api.js';
 
 class Base {
   constructor() { this.isConnected=true;this._selectedAudioInput='';this._selectedVideoInput=''; }
   _render() {}
 }
+
+test('media configuration uses HA authenticated API instead of a stale copied bearer token',async()=>{
+  const original=globalThis.fetch;
+  globalThis.fetch=()=>{throw Error('raw fetch should not be used');};
+  try {
+    let requested;
+    const hass={callApi:async(method,path)=>{requested={method,path};return {ice_servers:[]};}};
+    assert.deepEqual(await authenticatedGet(hass,'webrtc-config?node_id=studio'),{ice_servers:[]});
+    assert.deepEqual(requested,{method:'GET',path:'webrtc-config?node_id=studio'});
+  }finally{globalThis.fetch=original;}
+});
+
+test('media cleanup preserves the browser that accepted the live call',()=>{
+  const host=new (withWebRTC(Base))();
+  Object.assign(host,{_isCaller:true,_answeredByMe:true,_initiatedHere:true,_answerPendingCallId:'one',
+    _remoteAudio:{pause:()=>{}},_cleanupSIPUA:()=>{},_stopRingtone:()=>{},_removePopup:()=>{},_dismissBrowserNotification:()=>{}});
+  host._cleanupWebRTC();
+  assert.equal(host._isCaller,true);
+  assert.equal(host._answeredByMe,true);
+  assert.equal(host._initiatedHere,true);
+  assert.equal(host._answerPendingCallId,'one');
+  host._cleanupWebRTC({endCall:true});
+  assert.equal(host._isCaller,false);
+  assert.equal(host._answeredByMe,false);
+  assert.equal(host._initiatedHere,false);
+  assert.equal(host._answerPendingCallId,null);
+});
+
+test('configuration failures do not falsely report that TURN is disabled',async()=>{
+  const original=globalThis.fetch;
+  globalThis.fetch=async()=>({ok:false,status:502});
+  try {
+    const host=new (withWebRTC(Base))();
+    await host._fetchWebRTCConfig();
+    assert.equal(host._turnAvailable,undefined);
+    assert.match(host._webrtcConfigError,/could not be loaded/);
+  }finally{globalThis.fetch=original;}
+});
 
 test('a call does not reuse an in-flight idle media authorization', async()=>{
   const original=globalThis.fetch;
