@@ -75,6 +75,7 @@ _onHAWebRTCSignal(event) {
 
 _onHACallStatus(event) {
     if (event.node_id && event.node_id !== this._nodeId()) return;
+    if(this._endedCallIds?.has(event.call_id) && ['requesting','ringing','active'].includes(event.status))return;
     if (event.local_user_call && event.caller_user_id === this._hass?.user?.id) event = {...event, direction: 'outgoing'};
     const { call_id, status, direction, remote_node_id, call_type, sip_bridge_id, target_user_id, caller_user_id, answered_by_user_id } = event;
     // Only react to events that belong to this session's user.
@@ -191,6 +192,7 @@ _onHACallStatus(event) {
 
 _onHAIncomingCall(event) {
     if (event.node_id && event.node_id !== this._nodeId()) return;
+    if(this._endedCallIds?.has(event.call_id))return;
     const { call_id, from_node_id, from_label, call_type, target_user_id, metadata } = event;
     if (!this._hass?.user?.id) return;
     if (target_user_id && this._hass?.user?.id && target_user_id !== this._hass.user.id) {
@@ -355,7 +357,8 @@ async _callService(service, data = {}) {
       await this._hass.callService("simson", service, data);
       setTimeout(() => this._render(), 250);
     } catch (err) {
-      if (service === "make_call" || service === "call_user" || service === "call_sip_phone" || service === "call_phone_number") {
+      const uncertain=/may have started|request timed out/i.test(err?.message || '');
+      if (!uncertain && (service === "make_call" || service === "call_user" || service === "call_sip_phone" || service === "call_phone_number")) {
         this._clearLocalCallState();
       }
       this._actionError = err?.message || 'Could not reach Simson. Please retry.';

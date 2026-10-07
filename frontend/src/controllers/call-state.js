@@ -16,7 +16,7 @@ export function reconcileCall() {
     const targetUserId = this._activeCallAttr("target_user_id", "");
     const callerUserId = this._activeCallAttr("caller_user_id", "");
     const answeredByUserId = this._activeCallAttr("answered_by_user_id", "");
-    const isMyCall = ownsCall({call_id: callId, direction: entityDirection,
+    const isMyCall = !this._endedCallIds?.has(callId) && ownsCall({call_id: callId, direction: entityDirection,
       state: callState, target_user_id: targetUserId, caller_user_id: callerUserId,
       answered_by_user_id: answeredByUserId}, myUserId, this._currentCallId);
     const liveStates = ['incoming', 'requesting', 'ringing', 'active'];
@@ -116,5 +116,6 @@ export function reconcileCall() {
     }
 
 
-return {nodeId, connected, direction, isIdle, isIncoming, isRinging, isActive, hasCall, activeCallType, remoteLabel, callId};
+const visibleCallId=isMyCall?callId:provisionalOutgoing&&!this._endedCallIds?.has(this._currentCallId)?this._currentCallId || '':'';
+return {nodeId, connected, direction, isIdle, isIncoming, isRinging, isActive, hasCall, activeCallType, remoteLabel, callId:visibleCallId};
 }

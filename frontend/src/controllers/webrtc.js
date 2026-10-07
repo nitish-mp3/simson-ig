@@ -3,7 +3,7 @@ import { authenticatedGet } from '../transport/ha-api.js';
 export const withWebRTC = Base => class extends Base {
 async _fetchWebRTCConfig() {
     const callId = this._currentCallId || '';
-    if (this._webrtcConfig && this._webrtcConfigCallId === callId && (!this._webrtcConfigFetchedAt || Date.now()-this._webrtcConfigFetchedAt<60000)) return this._webrtcConfig;
+    if (this._webrtcConfig && (!callId || this._webrtcConfig.sip?.enabled) && this._webrtcConfigCallId === callId && (!this._webrtcConfigFetchedAt || Date.now()-this._webrtcConfigFetchedAt<60000)) return this._webrtcConfig;
     if (this._webrtcConfigPromise) {
       if (this._webrtcConfigPromiseCallId === callId) return this._webrtcConfigPromise;
       await this._webrtcConfigPromise;
@@ -15,7 +15,7 @@ async _fetchWebRTCConfig() {
     this._webrtcConfigPromiseCallId = callId;
     this._webrtcConfigPromise = (async () => {
       try {
-          this._webrtcConfig = await authenticatedGet(this._hass,'webrtc-config?call_id='+encodeURIComponent(callId)+'&node_id='+encodeURIComponent(this._nodeId?.() || ''));
+          this._webrtcConfig = await authenticatedGet(this._hass,'webrtc-config?call_id='+encodeURIComponent(callId)+'&node_id='+encodeURIComponent(this._nodeId?.() || ''),15000);
           this._webrtcConfigFetchedAt = Date.now();
           this._webrtcConfigCallId = callId;
           this._webrtcConfigNextRetryAt = 0;

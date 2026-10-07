@@ -4,12 +4,45 @@ import { withMediaDevices } from '../src/controllers/media-devices.js';
 import { withHomeAssistant } from '../src/controllers/home-assistant.js';
 import { withCallActions } from '../src/controllers/call-actions.js';
 import { withWebRTC } from '../src/controllers/webrtc.js';
+import { withSipBridge } from '../src/controllers/sip-bridge.js';
 import { authenticatedGet } from '../src/transport/ha-api.js';
 
 class Base {
   constructor() { this.isConnected=true;this._selectedAudioInput='';this._selectedVideoInput=''; }
   _render() {}
 }
+
+test('a disabled active-call configuration is fetched again instead of cached for a minute',async()=>{
+  const host=new (withWebRTC(Base))();
+  host._currentCallId='live-call';
+  let requests=0;
+  host._hass={callApi:async()=>({sip:{enabled:++requests>1}})};
+  assert.equal((await host._fetchWebRTCConfig()).sip.enabled,false);
+  assert.equal((await host._fetchWebRTCConfig()).sip.enabled,true);
+  assert.equal(requests,2);
+});
+
+test('unavailable SIP configuration exposes a retryable media failure without hanging up the handset',async()=>{
+  const host=new (withSipBridge(Base))();
+  host._initiatedHere=true;
+  host._fetchWebRTCConfig=async()=>({sip:{enabled:false,reason:'This call has ended or is not available to this user.'}});
+  host._callService=()=>{throw Error('must not hang up the handset');};
+  await host._startSIPCall('owned-bridge');
+  assert.match(host._mediaDeviceError,/^The media connection failed\./);
+  assert.match(host._mediaDeviceError,/not available to this user/);
+  assert.equal(host._pendingSIPBridgeId,null);
+});
+
+test('an ambiguous call request timeout preserves its known call ID instead of abandoning control',async()=>{
+  const host=new (withHomeAssistant(Base))();
+  host._currentCallId='known-call';host._outgoingIntentAt=Date.now();
+  let cleared=false;
+  host._clearLocalCallState=()=>{cleared=true;};
+  host._hass={callService:async()=>{throw Error('Simson request timed out; it may have started');}};
+  assert.equal(await host._callService('make_call'),false);
+  assert.equal(cleared,false);
+  assert.equal(host._currentCallId,'known-call');
+});
 
 test('media configuration uses HA authenticated API instead of a stale copied bearer token',async()=>{
   const original=globalThis.fetch;

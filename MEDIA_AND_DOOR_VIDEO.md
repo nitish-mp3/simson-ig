@@ -1,6 +1,16 @@
 # Media and door video
 
-Versions: VPS 1.6.13, integration 3.3.5, addon 5.1.10, card 5.3.4.
+Versions: VPS 1.6.14, integration 3.3.7, addon 5.1.10, card 5.3.6.
+
+## Browser media configuration recovery
+
+The screenshot of card 5.3.4 shows an answered call with unavailable phone audio, not a missing card. This error occurs before the SIP browser leg connects. Media configuration previously used the four-second polling timeout even though the addon upstream fetch can take longer. That request now has a separate bounded twelve-second timeout; browser configuration requests allow fifteen seconds, with call authorization fetched in parallel. Disabled active-call configurations are not cached for a minute. Configuration/import/dial failures now expose the media retry control and retain the real handset call. Responses distinguish denied/ended calls from unavailable VPS media settings without returning SIP credentials to unauthorized users. These fixes do not prove which configuration failure happened in that browser: its authenticated response and console are not available. They also do not implement the missing live RTSP bridge or certify native SIP video.
+
+## 1605 regression correction
+
+Calls at 14:08:47, 14:09:15 and 14:10:10 IST on 7 October reached 1605 and answered, then immediately ended. Each coincided with Asterisk's `No translator path: (starting codec is not valid)` warning. The 1.6.13 change explicitly seeded H.264 into the legacy Local/ConfBridge originate topology. That is unsafe on this installed media engine and has been reverted in 1.6.14 to the earlier working audio originate. No endpoint passwords, transports or routes were changed. A synthetic browser SDP test did not establish that the older Asterisk engine could mix that topology; native browser SIP video on this path is **not certified ready**.
+
+The card no longer resurrects confirmed-ended calls from stale ringing sensors or delayed events. Ambiguous request timeouts retain the known call ID instead of abandoning control. Mutation requests have a bounded 30-second response budget, distinct from the 4-second polling budget, because addon call registration awaits HA telemetry that can take longer than four seconds. Timed-out POSTs still never automatically repeat. Errors refresh the coordinator and distinguish an ended call from another user's live call; ownership checks are not relaxed.
 
 ## Verified fixes
 
@@ -12,7 +22,9 @@ Browser regressions measure received audio packets and decoded video frames when
 
 ## 1605 and native SIP video
 
-Registration identifies 1605 as an Akuvox E16C, not a 2N device. Its endpoint already allowed H.264, but the browser SIP client offered only audio and the conference profile disabled video. The new path adds a receive-only video transceiver without turning on the browser camera, allows H.264 on the browser endpoint and Local originate leg, and enables ConfBridge video forwarding. Gateway endpoints remain audio-only. A synthetic browser SIP offer verifies H.264 reception capability and zero local camera tracks.
+The existing unknown-face automation displays SIP video on the 1603 indoor display without RTSP configuration. That is evidence of a functioning native SIP-video device path; RTSP is not a prerequisite for displaying the same source in the browser. The routes differ: `OriginateDoorStationCall` uses a direct PJSIP originate with H.264 and a plain Dial bridge, whereas ordinary browser-originated extension calls currently use a Local channel followed by ConfBridge. The live 1605 endpoint permits `ulaw|alaw|h264`. Its registration and that codec allow-list do not demonstrate negotiated video on the separate browser route. Do not change the working display automation while repairing that route.
+
+Registration identifies 1605 as an Akuvox E16C, not a 2N device. Its endpoint already allowed H.264, but the browser SIP client offered only audio and the conference profile disabled video. The browser still supports receive-only H.264 without local camera acquisition, and the conference profile enables video forwarding. Explicit H.264 format seeding of Local originates has been removed due to the regression above. Gateway endpoints remain audio-only. A synthetic browser SIP offer verifies reception capability, not physical-device video delivery.
 
 Actual device delivery remains untested: both ends must negotiate compatible H.264, and the door station must transmit video during the answered SIP call. Asterisk forwards conference video; it does not transcode, upscale or synthesize frames. `follow_talker` selects the talking video-capable source. This is not a claim of simultaneous multi-camera conference layouts or native video on every SIP model.
 

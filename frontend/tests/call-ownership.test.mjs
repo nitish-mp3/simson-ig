@@ -25,6 +25,17 @@ test('local dialing renders immediately despite another call occupying the share
   assert.equal(view.isRinging,true);
   assert.equal(view.remoteLabel,'59330025');
   assert.equal(host._currentCallId,undefined);
+  assert.equal(view.callId,'');
+});
+
+test('confirmed terminal calls cannot resurrect from stale ringing sensors',()=>{
+  const attributes={call_id:'ended',direction:'outgoing',caller_user_id:'me'};
+  const host={_nodeId:()=> 'office',_isConnected:()=>true,_callState:()=> 'ringing',
+    _activeCallAttr:(key,fallback='')=>attributes[key]??fallback,_hass:{user:{id:'me'}},
+    _endedCallIds:new Set(['ended']),_prevCallState:'idle'};
+  const view=reconcileCall.call(host);
+  assert.equal(view.hasCall,false);
+  assert.equal(view.callId,'');
 });
 
 test('cold incoming ringing state restores answer controls only for its recipient', () => {

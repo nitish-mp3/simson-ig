@@ -1,6 +1,6 @@
 # Call controls and privacy
 
-Requires integration 3.3.5, addon 5.1.10 and card 5.3.4. VPS fixes are version 1.6.13. See [media and door video](MEDIA_AND_DOOR_VIDEO.md) for verified relay fixes and remaining device/notification setup.
+Requires integration 3.3.7, addon 5.1.10 and card 5.3.6. VPS fixes are version 1.6.14. See [media and door video](MEDIA_AND_DOOR_VIDEO.md) for the legacy 1605 codec correction, verified relay fixes and remaining device/notification setup.
 
 ## Gateway recovery
 

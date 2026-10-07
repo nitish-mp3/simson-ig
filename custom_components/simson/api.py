@@ -66,13 +66,13 @@ class SimsonApiClient:
             await self._session.close()
             self._session = None
 
-    async def _get(self, path: str) -> dict:
+    async def _get(self, path: str, timeout: aiohttp.ClientTimeout | None = None) -> dict:
         session = self._get_session()
         last_err: Exception | None = None
         last_http_compat_err: aiohttp.ClientResponseError | None = None
         for base in self._candidate_bases():
             try:
-                async with session.get(f"{base}{path}") as resp:
+                async with session.get(f"{base}{path}", **({"timeout": timeout} if timeout else {})) as resp:
                     resp.raise_for_status()
                     if base != self._base:
                         logger.info("Simson addon API reachable at %s; using it for this session", base)
@@ -96,7 +96,8 @@ class SimsonApiClient:
         last_http_compat_err: aiohttp.ClientResponseError | None = None
         for base in self._candidate_bases():
             try:
-                async with session.post(f"{base}{path}", json=data or {}) as resp:
+                async with session.post(f"{base}{path}", json=data or {},
+                    timeout=aiohttp.ClientTimeout(total=30, connect=1.5, sock_connect=1.5)) as resp:
                     if resp.status >= 400:
                         try:
                             payload = await resp.json(content_type=None)
@@ -348,7 +349,7 @@ class SimsonApiClient:
         return await self._post("/api/remote-users", {"node_id": node_id})
 
     async def webrtc_config(self) -> dict:
-        return await self._get("/api/webrtc-config")
+        return await self._get("/api/webrtc-config", timeout=aiohttp.ClientTimeout(total=12, connect=1.5, sock_connect=1.5))
 
     async def get_call_history(self, limit: int = 50) -> dict:
         return await self._get(f"/api/history?limit={limit}")

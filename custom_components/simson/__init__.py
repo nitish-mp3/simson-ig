@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import timedelta
 from urllib.parse import unquote, urlsplit, urlunsplit, parse_qsl, urlencode
@@ -175,13 +176,18 @@ class WebRTCConfigView(HomeAssistantView):
             client = client_for_node(self._hass, self._client, str(request.query.get("node_id") or ""))
             if client is None:
                 return web.json_response({"error": "Simson node is unavailable"}, status=404)
-            data = await client.webrtc_config()
             user = request.get("hass_user")
             call_id = str(request.query.get("call_id") or "")
-            calls_data = await client.calls() if call_id else {}
+            if call_id:
+                data, calls_data = await asyncio.gather(client.webrtc_config(), client.calls())
+            else:
+                data, calls_data = await client.webrtc_config(), {}
             selected = next((item for item in calls_data.get("calls", []) if item.get("call_id") == call_id), None)
             if not user or not can_control_call(selected, user.id, "signal"):
-                data = {**data, "sip": {"enabled": False}}
+                reason = "This call has ended or is not available to this user." if call_id else "Select an active call before connecting media."
+                data = {**data, "sip": {"enabled": False, "reason": reason}}
+            elif not (data.get("sip") or {}).get("enabled"):
+                data = {**data, "sip": {"enabled": False, "reason": "The addon could not obtain enabled SIP media configuration from the VPS."}}
             return web.json_response(data)
         except Exception as err:
             logger.error("Failed to proxy webrtc-config: %s", err)
@@ -315,8 +321,10 @@ def _register_services(hass: HomeAssistant, client: SimsonApiClient) -> None:
             user = await hass.auth.async_get_user(user_id)
             if user and user.is_admin:
                 return selected["call_id"]
-        if not selected or not can_control_call(selected, user_id, action):
-            raise HomeAssistantError("This call belongs to another user or is no longer available")
+        if not selected or selected.get("state") not in ("requesting", "incoming", "ringing", "active"):
+            raise HomeAssistantError("This call has ended or is no longer available. Refresh the call list.")
+        if not can_control_call(selected, user_id, action):
+            raise HomeAssistantError("This call belongs to another user")
         return selected["call_id"]
 
     async def handle_clear_stuck_calls(call: ServiceCall) -> None:
@@ -377,6 +385,7 @@ def _register_services(hass: HomeAssistant, client: SimsonApiClient) -> None:
         """Surface addon/API failures in HA instead of silently logging them."""
         message = f"Simson {action} failed: {err}"
         logger.error(message)
+        refresh_all_entries()
         raise HomeAssistantError(message) from err
 
     def fire_service_result(service: str, result: dict) -> None:

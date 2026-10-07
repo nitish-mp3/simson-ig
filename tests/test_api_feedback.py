@@ -9,6 +9,17 @@ module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)
 
 
+@pytest.mark.asyncio
+async def test_media_config_timeout_covers_upstream_fetch_without_slowing_status_polling():
+    client = module.SimsonApiClient("http://localhost:8799")
+    from unittest.mock import AsyncMock
+    client._get = AsyncMock(return_value={})
+    await client.webrtc_config()
+    timeout = client._get.call_args.kwargs["timeout"]
+    assert timeout.total == 12
+    assert timeout.connect == 1.5
+
+
 class Response:
     def __init__(self, status, payload):
         self.status = status
@@ -33,6 +44,7 @@ async def test_business_errors_keep_details_and_do_not_retry_other_hosts_or_rout
     posted = []
     def post(url, **kwargs):
         posted.append(url)
+        assert kwargs['timeout'].total == 30
         return Response(status, {"error": message, "extension": "3101"})
     client._get_session = lambda: SimpleNamespace(post=post)
     with pytest.raises(module.SimsonApiError) as caught:

@@ -23,6 +23,8 @@ async _startSIPCall(bridgeId) {
       console.log("[Simson SIP] already connecting/in bridge", bridgeId); return;
     }
     this._pendingSIPBridgeId = bridgeId;
+    this._mediaDeviceError = '';
+    this._actionError = '';
     // Tear down any previous UA but preserve our pending flag.
     if (this._sipUA) { try { this._sipUA.disconnect(); } catch (e) {} this._sipUA = null; }
 
@@ -34,15 +36,15 @@ async _startSIPCall(bridgeId) {
       ]);
     } catch (error) {
       this._pendingSIPBridgeId = null;
-      this._actionError = 'Could not load phone audio. Please retry.';
+      this._mediaDeviceError = 'The media connection failed. Could not load phone audio. Please retry.';
       this._render();
       return;
     }
     if (this._pendingSIPBridgeId !== bridgeId || !this.isConnected) return;
-    const sip = cfg.sip || {};
+    const sip = cfg?.sip || {};
     console.log("[Simson SIP] webrtc-config sip:", JSON.stringify({enabled: sip.enabled, ws_url: sip.ws_url, username: sip.username, domain: sip.domain}));
     if (!sip.enabled || !sip.ws_url || !sip.username || !sip.password) {
-      this._actionError = 'Phone audio is unavailable. Check the addon connection.';
+      this._mediaDeviceError = 'The media connection failed. ' + (sip.reason || this._webrtcConfigError || 'Phone audio configuration is incomplete. Check the addon connection and retry.');
       this._render();
       this._pendingSIPBridgeId = null;
       return;
@@ -65,7 +67,9 @@ async _startSIPCall(bridgeId) {
         ua.dial(bridgeId).catch(e => {
           if(this._sipUA!==ua)return;
           console.error("Simson SIP dial error:", e);
+          this._mediaDeviceError = 'The media connection failed. ' + (e?.message || 'Could not join the SIP media bridge. Please retry.');
           this._cleanupSIPUA();
+          this._render();
         });
       },
       onError: (e) => {
