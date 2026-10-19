@@ -1,8 +1,10 @@
 # Call controls and privacy
 
-Requires integration 3.3.9, addon 5.1.11 and card 5.3.8. VPS fixes are version 1.6.15. See [media and door video](MEDIA_AND_DOOR_VIDEO.md) for SDP parser compatibility, Core-side event fallback, the legacy 1605 codec correction and remaining device/notification setup.
+Requires integration 3.4.0, addon 5.1.12 and card 5.4.0 for the documented UI features. Latest VPS fixes are version 1.6.17; its gateway disconnect recovery requires only the VPS update. See [media and door video](MEDIA_AND_DOOR_VIDEO.md) for native SIP video, SDP parser compatibility, Core-side event fallback and remaining device/notification setup.
 
 ## Gateway recovery
+
+VPS 1.6.17 adds automatic cleanup for answered outbound Local legs and missing-peer reconciliation for ordinary handset/browser gateway calls, not just automation callbacks. It preserves real Local suffixes, retries failed cleanup and prevents late cleanup from targeting a new call on the same gateway. No periodic HA hangup automation is required for these VPS failures. If an FXO gateway never reports the outside party's disconnect and keeps both legs live, its physical line-disconnect supervision must still be verified; an arbitrary silence cutoff is not used.
 
 ```yaml
 action: simson.clear_stuck_calls
@@ -37,7 +39,11 @@ data:
   call_type: voice
 ```
 
-Local contacts appear directly in the dialer. Node selection remains available for another site. User browser calls require a browser/Companion app to answer; a SIP handset callback still uses `simson.make_call` with `source_extension`.
+Local contacts appear in the searchable People tab, six per page. The authenticated directory includes enabled non-system users even before a contact entity is available; it does not require dashboard presence. Devices use a separate tab and history is searchable, filtered and paginated. Node selection remains available for another site. User browser calls require a browser/Companion app to answer; a SIP handset callback still uses `simson.make_call` with `source_extension`.
+
+Scripts may alternatively provide `target_user_id` and `node_id` to `simson.call_user` when the contact entity is unavailable. The target must be an enabled non-system user on that exact node. Authenticated caller identity and busy/ownership checks remain enforced.
+
+Notification taps now navigate to an HA frontend route before authenticated call controls run. Legacy call-action GET links only redirect; they do not answer, decline, read or end calls without authentication. Phone notification delivery still requires a correctly owned Companion registration and OS permissions.
 
 Each contact also has a native `button` entity named `Call <user>`. Use `button.press` from a dashboard action, or invoke `simson.call_user` from a script with either the sensor or button entity. The authenticated user is the caller; a provided caller ID cannot override their identity. Self-calls, disabled users and busy participants return actionable errors. Concurrent contact calls on an integration entry are serialized before the addon request.
 

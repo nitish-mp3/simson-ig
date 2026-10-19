@@ -34,7 +34,7 @@ def test_notification_links_preserve_dashboard_query_and_reject_external_redirec
     assert parse_qs(location.query)["simson_call"] == ["call/id"]
     assert location.fragment == "panel"
     unsafe = module.incoming_notification("one", "office", "Caller", "//external.example")
-    assert urlsplit(unsafe["data"]["url"]).path == "/lovelace/default_view"
+    assert urlsplit(unsafe["data"]["url"]).path == "/simson-call"
 
 
 @pytest.mark.asyncio

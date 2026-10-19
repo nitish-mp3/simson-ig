@@ -1,6 +1,16 @@
 # Media and door video
 
-Versions: VPS 1.6.15, integration 3.3.9, addon 5.1.11, card 5.3.8.
+Versions: VPS 1.6.16, integration 3.4.0, addon 5.1.12, card 5.4.0.
+
+## 15 October: native SIP video correction
+
+RTSP is **not required** for the Akuvox's existing SIP video. VPS 1.6.16 originates eligible video-enabled phones directly through PJSIP, avoiding the legacy Local-channel H.264 failure. A dedicated conference profile selects the marked door camera rather than following whoever is talking. Existing display automation, gateway/audio routes and advanced callback/announcement/auto-answer behavior are unchanged. This new path is deliberately limited to uncomplicated video-enabled endpoints; see [videophone setup](VIDEOPHONES.md).
+
+The new route was verified using an isolated second instance of the installed Asterisk engine and dummy endpoints: the browser actually decoded H.264 frames and received audio packets. It was deployed without restarting production Asterisk. No real handset was called, so physical Akuvox footage at this site still requires user verification. Older limitations and incident details below describe the legacy topology, not this newly verified dummy-media path.
+
+Card 5.4.0 distinguishes received decoded frames from a merely negotiated video track. The SIP door card no longer requires a camera entity. Optional separate video sources can now be linked using an administrator-only HA action, with private bridge credentials and participant-authorized video-only signaling. This is optional and no physical RTSP source has been configured or tested; see [setup and security](VIDEOPHONES.md).
+
+Addon call-notification links now open the HA frontend rather than an authenticated API URL. Legacy API GET links perform navigation only, with call mutations still authenticated and ownership-checked. The user directory no longer depends on currently loaded dashboards or pre-existing contact sensors. Contacts and history are searchable and paginated instead of growing the card indefinitely.
 
 ## Browser SIP 400 and Supervisor 502
 
@@ -34,7 +44,7 @@ Browser regressions measure received audio packets and decoded video frames when
 
 ## 1605 and native SIP video
 
-The existing unknown-face automation displays SIP video on the 1603 indoor display without RTSP configuration. That is evidence of a functioning native SIP-video device path; RTSP is not a prerequisite for displaying the same source in the browser. The routes differ: `OriginateDoorStationCall` uses a direct PJSIP originate with H.264 and a plain Dial bridge, whereas ordinary browser-originated extension calls currently use a Local channel followed by ConfBridge. The live 1605 endpoint permits `ulaw|alaw|h264`. Its registration and that codec allow-list do not demonstrate negotiated video on the separate browser route. Do not change the working display automation while repairing that route.
+The existing unknown-face automation displays SIP video on the 1603 indoor display without RTSP configuration. That is evidence of a functioning native SIP-video device path; RTSP is not a prerequisite for displaying the same source in the browser. Historically the routes differed: `OriginateDoorStationCall` used a direct PJSIP originate with H.264 and a plain Dial bridge, whereas ordinary browser-originated extension calls used a Local channel followed by ConfBridge. VPS 1.6.16 introduces the scoped direct-PJSIP browser path described above. The live 1605 endpoint permits `ulaw|alaw|h264`. Registration and that codec allow-list alone do not demonstrate physical video delivery. The working display automation remains unchanged.
 
 Registration identifies 1605 as an Akuvox E16C, not a 2N device. Its endpoint already allowed H.264, but the browser SIP client offered only audio and the conference profile disabled video. The browser still supports receive-only H.264 without local camera acquisition, and the conference profile enables video forwarding. Explicit H.264 format seeding of Local originates has been removed due to the regression above. Gateway endpoints remain audio-only. A synthetic browser SIP offer verifies reception capability, not physical-device video delivery.
 
@@ -46,7 +56,7 @@ My2N cloud access, local SIP calling and local RTSP streaming are separate paths
 
 If native SIP video is unavailable or an independent live preview is required, the production fallback is **local RTSP H.264 → an authenticated LAN-side WebRTC bridge such as go2rtc → the card**, alongside the SIP audio call. A browser cannot play `rtsp://` directly. Do not expose RTSP/bridge management ports to the Internet or put camera passwords in Lovelace YAML. Keep source URL, username and password in server-side device configuration, and expose only a named stream through an authenticated, authorized SDP endpoint. The bridge must reach the door's LAN; a remote VPS cannot reach a private device without a configured network path.
 
-2N commonly publishes `/h264_stream`; use the URL shown by that device's streaming configuration, enable RTSP/video, and choose a browser-compatible H.264 profile and suitable frame rate. A JPEG snapshot integration is not a real-time stream and its refresh rate cannot be fixed with card CSS. Continuous video need not be represented by a snapshot camera entity. The current door card's existing camera-entity mode is retained for compatibility; a new direct-RTSP configuration/bridge UI is **not implemented in this release**. No actual 2N RTSP address or credentials were supplied, so its local stream has not been connected or verified.
+2N commonly publishes `/h264_stream`; use the URL shown by that device's streaming configuration, enable RTSP/video, and choose a browser-compatible H.264 profile and suitable frame rate. A JPEG snapshot integration is not a real-time stream and its refresh rate cannot be fixed with card CSS. Continuous video need not be represented by a snapshot camera entity. Existing camera-entity preview remains optional; integration 3.4.0 also provides the named-bridge configuration action described in [videophone setup](VIDEOPHONES.md). No actual 2N RTSP address or credentials were supplied, so its local stream has not been connected or verified.
 
 References: [2N streaming](https://wiki.2n.com/hip/conf/latest/en/5-konfigurace-interkomu/5-4-sluzby/5-4-2-streamovani), [2N camera/SIP video](https://wiki.2n.com/hip/conf/latest/en/5-konfigurace-interkomu/5-5-hardware/5-5-3-kamera), [Asterisk conference video](https://docs.asterisk.org/Configuration/Applications/Conferencing-Applications/ConfBridge/ConfBridge-Configuration/), [go2rtc](https://github.com/AlexxIT/go2rtc).
 

@@ -332,7 +332,7 @@ call_user:
   fields:
     entity_id:
       name: User contact
-      required: true
+      required: false
       selector:
         entity:
           integration: simson
@@ -346,6 +346,14 @@ call_user:
           options:
             - voice
             - video
+    target_user_id:
+      name: Recipient HA user ID (when no contact entity)
+      selector:
+        text:
+    node_id:
+      name: Simson node (required with recipient user ID)
+      selector:
+        text:
     caller_user_id:
       description: For unattended automations, the HA user who owns the browser call. Use source_extension for a handset callback instead.
       selector:
@@ -386,3 +394,46 @@ test_user_notification:
         entity:
           integration: simson
           domain: sensor
+
+configure_videophone:
+  name: Link Videophone Video Source
+  description: Administrator-only. Link a SIP extension to a named go2rtc RTSP stream. SIP audio stays separate; video requires an owned active call. Configure RTSP credentials in the bridge, not in dashboard YAML.
+  fields:
+    node_id:
+      name: Simson node
+      required: true
+      selector:
+        text:
+    extension:
+      name: SIP extension
+      required: true
+      selector:
+        text:
+    stream_name:
+      name: Named go2rtc stream
+      example: entrance
+      selector:
+        text:
+    bridge_url:
+      name: Private go2rtc API origin
+      default: http://127.0.0.1:1984
+      selector:
+        text:
+    label:
+      name: Device name
+      selector:
+        text:
+    bridge_username:
+      name: Bridge API username
+      selector:
+        text:
+    bridge_password:
+      name: Bridge API password
+      selector:
+        text:
+          type: password
+    remove:
+      name: Remove video link
+      default: false
+      selector:
+        boolean:

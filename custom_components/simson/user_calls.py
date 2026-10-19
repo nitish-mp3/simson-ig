@@ -4,16 +4,20 @@ import asyncio
 async def start_user_call(hass, call):
     from homeassistant.exceptions import HomeAssistantError
 
-    entity = hass.states.get(call.data["entity_id"])
-    if not entity or not entity.attributes.get("simson_contact"):
-        raise HomeAssistantError("Choose a Simson user contact")
-    owner = hass.data.get("simson", {}).get(entity.attributes.get("entry_id"), {})
+    entity = hass.states.get(call.data.get("entity_id", "")) if call.data.get("entity_id") else None
+    if entity and entity.attributes.get("simson_contact"):
+        owner = hass.data.get("simson", {}).get(entity.attributes.get("entry_id"), {})
+        node_id = entity.attributes.get("node_id")
+        target_id = entity.attributes.get("user_id")
+    else:
+        node_id = call.data.get("node_id", "")
+        target_id = call.data.get("target_user_id", "")
+        owner = next((data for data in hass.data.get("simson", {}).values()
+            if isinstance(data, dict) and data.get("coordinator") and (data["coordinator"].data or {}).get("node_id") == node_id), {})
     client = owner.get("client")
-    node_id = entity.attributes.get("node_id")
-    if not client or not node_id:
+    if not client or not node_id or not target_id:
         raise HomeAssistantError("This contact's node is unavailable")
     caller_id = call.context.user_id or call.data.get("caller_user_id", "")
-    target_id = entity.attributes.get("user_id")
     if not caller_id:
         raise HomeAssistantError("An unattended script must provide caller_user_id")
     caller = await hass.auth.async_get_user(caller_id)

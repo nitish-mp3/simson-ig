@@ -41,6 +41,16 @@ async def test_contact_routes_to_its_own_entry_and_caller_context_cannot_be_spoo
 
 
 @pytest.mark.asyncio
+async def test_directory_user_can_be_called_without_a_registered_contact_entity(fixture):
+    hass, call, client, users = fixture
+    hass.data["simson"]["owner"]["coordinator"] = SimpleNamespace(data={"node_id": "office"})
+    call.data = {"node_id": "office", "target_user_id": "recipient"}
+    await module.start_user_call(hass, call)
+    assert client.make_call.call_args.kwargs["target_user_id"] == "recipient"
+    assert client.make_call.call_args.kwargs["caller_user_id"] == "caller"
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("participant,message", [("caller", "You already"), ("recipient", "Recipient is already")])
 async def test_busy_users_are_rejected_before_dialing(fixture, participant, message):
     hass, call, client, users = fixture

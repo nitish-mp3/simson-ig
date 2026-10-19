@@ -1,8 +1,9 @@
 import { html, nothing } from 'lit';
+import '../transport/door-stream.js';
 
 export function callView(host, view) {
   const localVideo = Boolean(host._localStream?.getVideoTracks().length);
-  const remoteVideo = Boolean(host._remoteStream?.getVideoTracks().some(track=>track.readyState==='live'&&!track.muted));
+  const remoteVideo = Boolean(host._remoteVideoReady && host._remoteStream?.getVideoTracks().some(track=>track.readyState==='live'&&!track.muted));
   const video = view.isActive && (localVideo || Boolean(host._remoteStream?.getVideoTracks().length));
   const isSipCall = view.activeCallType === 'sip' || host._currentCallType === 'sip';
   const mediaConnected = isSipCall ? host._sipUA?._pc?.connectionState === 'connected' : host._pc?.connectionState === 'connected';
@@ -10,9 +11,12 @@ export function callView(host, view) {
   const mediaFailed = host._mediaDeviceError?.startsWith('The media connection failed.');
   const statusText = view.isActive ? (mediaFailed ? 'Media connection failed' : mediaConnected ? 'Connected' : 'Connecting media…') : view.isIncoming ? (incomingVideo ? 'Incoming video call' : 'Would like to talk to you') : view.callId ? 'Ringing · Waiting for an answer…' : 'Sending your call request to the node…';
   const act = (key, action) => () => host._runAction(key, action);
+  const extension = String(host._activeCallAttr('target_extension') || host._activeCallAttr('remote_node_id') || host._currentRemoteNode || '').replace(/^sip:/,'');
+  const linkedVideo = isSipCall && (host._videoProfiles || []).some(profile=>profile.extension===extension);
+  const localIntent = host._initiatedHere || host._answeredByMe || host._answerPendingCallId===view.callId;
   return html`<section class="call-workspace">
     <span class="eyebrow">${view.isActive ? 'LIVE CONVERSATION' : view.isIncoming ? 'INCOMING CALL' : view.callId ? 'CALLING' : 'STARTING YOUR CALL'}</span>
-    ${video ? html`<div class="video-stage"><video id="remote-video" autoplay muted playsinline></video>${!remoteVideo ? html`<span class="video-wait">Waiting for their camera</span>` : nothing}${localVideo ? html`<video class="local-video" id="local-video" autoplay muted playsinline></video>` : nothing}<span class="live-label">LIVE</span></div>` : html`<div class="call-avatar">${String(view.remoteLabel).slice(0,2).toUpperCase()}</div>`}
+    ${linkedVideo && view.isActive ? html`<simson-door-stream .hass=${host._hass} .nodeId=${host._nodeId()} .extension=${extension} .callId=${view.callId} .active=${Boolean(localIntent)} .iceServers=${host._webrtcConfig?.ice_servers || []}></simson-door-stream>` : video ? html`<div class="video-stage"><video id="remote-video" autoplay muted playsinline></video>${!remoteVideo ? html`<span class="video-wait">Camera video has not arrived yet.${isSipCall?' SIP audio remains connected. RTSP is optional, not required for SIP video.':''}</span>` : nothing}${localVideo ? html`<video class="local-video" id="local-video" autoplay muted playsinline></video>` : nothing}<span class="live-label">${remoteVideo?'LIVE':'WAITING FOR VIDEO'}</span></div>` : html`<div class="call-avatar">${String(view.remoteLabel).slice(0,2).toUpperCase()}</div>`}
     <h2>${view.remoteLabel}</h2><p class="call-caption" role="status">${statusText} <span id="call-timer"></span></p>
     ${!view.isActive && !view.isIncoming ? html`<div class="call-setup-status" role="status"><span class="call-setup-spinner"></span><span><b>${view.callId ? 'The destination is being called' : 'Connecting to your call service'}</b><small>${view.callId ? 'You can stay here while the other phone rings.' : 'This card will update as soon as the node responds.'}</small></span></div>` : nothing}
     ${host._micAllowed === false ? html`<div class="notice error">Microphone unavailable. Allow microphone access in your browser to speak.</div>` : nothing}

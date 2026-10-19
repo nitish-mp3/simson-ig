@@ -251,6 +251,7 @@ _cleanupWebRTC({endCall=false}={}) {
     this._remoteAudio.pause();
     this._remoteAudio.srcObject = null;
     this._remoteStream = null;
+    this._remoteVideoReady = false;
     this._playbackBlocked = false;
     this._pendingOffer = null;
     this._makingOffer = false;

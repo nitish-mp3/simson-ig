@@ -68,6 +68,12 @@ _callUserEntity(entityId) {
     return this._callService('call_user', {entity_id:entityId,call_type:this._videoEnabled ? 'video' : 'voice'});
   }
 
+_callDirectoryUser(user) {
+    if (user.entity_id && this._hass?.states?.[user.entity_id]) return this._callUserEntity(user.entity_id);
+    this._beginOutgoingCall(this._nodeId(), this._videoEnabled ? 'video' : 'voice', user.user_name);
+    return this._callService('call_user', {node_id:this._nodeId(),target_user_id:user.user_id,call_type:this._videoEnabled ? 'video' : 'voice'});
+  }
+
 _joinUserCall() {
     if (!this._currentCallId || !this._isCaller) return;
     this._initiatedHere = true;

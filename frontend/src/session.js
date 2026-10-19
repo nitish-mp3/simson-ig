@@ -43,11 +43,11 @@ export class CallSession extends CardController {
       if (!notificationNode || notificationNode === this._nodeId()) {
         const action = url.searchParams.get('simson_action');
         const notificationCall = url.searchParams.get('simson_call');
-        if (notificationCall && ['answer','decline'].includes(action)) {
+        if (notificationCall && ['answer','decline','hangup'].includes(action)) {
           for (const parameter of ['simson_action','simson_call','simson_node']) url.searchParams.delete(parameter);
           window.history.replaceState(window.history.state, '', url);
           if (action === 'answer') this._answer(notificationCall);
-          else this._runAction('Declining call…',()=>this._callService('reject_call', {call_id:notificationCall,reason:'declined_from_notification'}));
+          else this._runAction(action==='decline'?'Declining call…':'Ending call…',()=>this._callService(action==='decline'?'reject_call':'hangup_call', {call_id:notificationCall,...(action==='decline'?{reason:'declined_from_notification'}:{})}));
         }
         const callId = url.searchParams.get('simson_answer');
         if (callId) {
@@ -66,6 +66,7 @@ export class CallSession extends CardController {
       this._userHeartbeatInterval = setInterval(() => this._sendUserHeartbeat(), 20000);
     }
     if (!this._targetsLoaded && !this._targetsLoading) this._loadTargets();
+    this._loadPeople();
   }
 
   connectedCallback() {

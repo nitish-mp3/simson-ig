@@ -389,7 +389,7 @@ test('door card does not start calls or live streaming on page load',async()=>{
   });
   await page.getByRole('button',{name:'Call door phone'}).waitFor();
   assert.equal(await page.evaluate(()=>window.calls.filter(call=>call.service==='make_call').length),0);
-  assert.equal(await page.evaluate(()=>document.querySelector('simson-door-phone-card')._card.shadowRoot.querySelector('simson-door-camera').live),false);
+  assert.equal(await page.evaluate(()=>document.querySelector('simson-door-phone-card')._card.shadowRoot.querySelector('simson-door-camera')),null);
   await page.close();
 });
 
@@ -419,6 +419,79 @@ test('SIP browser offer receives H264 video without acquiring the local camera',
   assert.equal(result.unsupported,false);
   assert.deepEqual(result.unmapped,[]);
   assert.ok(result.attributes.every(count=>count<=64),JSON.stringify(result.attributes));
+  await page.close();
+});
+
+test('people and history remain searchable and bounded with large directories on mobile',async()=>{
+  const page=await browser.newPage({viewport:{width:390,height:844}});await load(page);
+  await page.evaluate(async()=>{
+    const shell=document.querySelector('simson-relay-card');
+    const host=shell._card.session;
+    host._hass={...window.mockHass,callApi:async()=>({node_id:'office',users:Array.from({length:24},(_,index)=>({user_id:'user-'+index,user_name:'Person '+(index+1),entity_id:'',state:'ready'}))})};
+    await host._loadPeople(true);
+  });
+  await page.getByRole('button',{name:'People · 24',exact:true}).waitFor();
+  assert.equal(await page.locator('.compact-contacts .contact').count(),6);
+  await page.getByRole('button',{name:'Next contacts page',exact:true}).click();
+  await page.getByRole('button',{name:/Person 7/}).waitFor();
+  await page.getByRole('textbox',{name:'Search contacts and devices'}).fill('Person 24');
+  await page.getByRole('button',{name:/Person 24/}).waitFor();
+  assert.equal(await page.locator('.compact-contacts .contact').count(),1);
+  await page.screenshot({path:path.join(integrationRoot,'frontend/test-results/compact-directory-mobile.png'),fullPage:true});
+  await page.getByRole('button',{name:/Person 24/}).click();
+  await page.waitForFunction(()=>window.calls.some(call=>call.service==='call_user'));
+  const call=await page.evaluate(()=>window.calls.find(call=>call.service==='call_user').data);
+  assert.equal(call.target_user_id,'user-23');
+  assert.equal(call.node_id,'office');
+  await page.evaluate(()=>{
+    const shell=document.querySelector('simson-relay-card');
+    const host=shell._card.session;
+    host._clearLocalCallState();
+    host._history=Array.from({length:50},(_,index)=>({call_id:'history-'+index,remote_label:'Person '+(index+1),state:index%2?'ended':'missed',direction:'incoming'}));
+    host._historyLoaded=true;
+    shell.setConfig({node_id:'office',view:'history'});
+  });
+  await page.getByRole('textbox',{name:'Search call history'}).waitFor();
+  assert.equal(await page.locator('.history-row').count(),6);
+  await page.getByRole('combobox',{name:'Filter call history'}).selectOption('missed');
+  await page.getByRole('textbox',{name:'Search call history'}).fill('Person 49');
+  await page.getByText('Person 49',{exact:true}).waitFor();
+  assert.equal(await page.locator('.history-row').count(),1);
+  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
+  await page.close();
+});
+
+test('linked door video receives decoded frames without microphone capture and stops on hangup',async()=>{
+  const page=await browser.newPage();await load(page);
+  await page.evaluate(()=>{
+    window.videoRequests=[];
+    window.fixtureCanvas=document.createElement('canvas');
+    window.fixtureCanvas.width=320;window.fixtureCanvas.height=180;
+    const ctx=window.fixtureCanvas.getContext('2d');
+    let frame=0;window.draw=setInterval(()=>{ctx.fillStyle=++frame%2?'#00bb88':'#245599';ctx.fillRect(0,0,320,180);},100);
+    window.fixtureStream=window.fixtureCanvas.captureStream(10);
+    window.getMic=navigator.mediaDevices.getUserMedia;
+    navigator.mediaDevices.getUserMedia=()=>{throw Error('RTSP viewing must not capture the microphone');};
+    const stream=document.createElement('simson-door-stream');
+    stream.nodeId='office';stream.extension='1604';stream.callId='owned-call';
+    stream.hass={callApi:async(method,path,body)=>{
+      window.videoRequests.push({method,path,call:body.call_id,audio:body.sdp.includes('m=audio')});
+      const peer=window.videoSource=new RTCPeerConnection({iceServers:[]});
+      await peer.setRemoteDescription({type:'offer',sdp:body.sdp});
+      peer.addTrack(window.fixtureStream.getVideoTracks()[0],window.fixtureStream);
+      await peer.setLocalDescription(await peer.createAnswer());
+      if(peer.iceGatheringState!=='complete')await new Promise(resolve=>peer.addEventListener('icegatheringstatechange',()=>{if(peer.iceGatheringState==='complete')resolve();}));
+      return {type:'answer',sdp:peer.localDescription.sdp};
+    }};
+    window.doorStream=stream;document.querySelector('#mount').append(stream);
+  });
+  assert.equal(await page.evaluate(()=>window.videoRequests.length),0);
+  await page.evaluate(()=>{window.doorStream.active=true;});
+  await page.waitForFunction(()=>window.doorStream.status==='live'&&window.doorStream.querySelector('video').videoWidth>0,null,{timeout:20000});
+  assert.deepEqual(await page.evaluate(()=>window.videoRequests),[{method:'POST',path:'simson/video/offer',call:'owned-call',audio:false}]);
+  await page.evaluate(()=>{window.doorPeer=window.doorStream._peer;window.doorStream.active=false;});
+  await page.waitForFunction(()=>window.doorPeer.connectionState==='closed'&&window.doorStream.querySelector('video').srcObject===null);
+  await page.evaluate(()=>{window.videoSource.close();window.fixtureStream.getTracks().forEach(track=>track.stop());clearInterval(window.draw);navigator.mediaDevices.getUserMedia=window.getMic;});
   await page.close();
 });
 
@@ -509,14 +582,15 @@ test('both users can add cameras during an established voice call without losing
   });
   await page.waitForFunction(()=>window.peers.every(peer=>peer._pc?.connectionState==='connected'));
   await page.evaluate(()=>Promise.all(window.peers.map(peer=>peer._enableCamera())));
-  await page.waitForFunction(async()=>{
+  await page.evaluate(()=>{window.mediaCheck=setInterval(async()=>{
     for(const peer of window.peers) {
       const stats=await peer._pc.getStats();
-      if(![...stats.values()].some(stat=>stat.type==='inbound-rtp'&&stat.kind==='video'&&stat.framesDecoded>0))return false;
-      if(![...stats.values()].some(stat=>stat.type==='inbound-rtp'&&stat.kind==='audio'&&stat.packetsReceived>0))return false;
+      if(![...stats.values()].some(stat=>stat.type==='inbound-rtp'&&stat.kind==='video'&&stat.framesDecoded>0))return;
+      if(![...stats.values()].some(stat=>stat.type==='inbound-rtp'&&stat.kind==='audio'&&stat.packetsReceived>0))return;
     }
-    return true;
-  },null,{timeout:15000});
+    window.bothMediaReady=true;clearInterval(window.mediaCheck);
+  },100);});
+  await page.waitForFunction(()=>window.bothMediaReady,null,{timeout:15000});
   assert.deepEqual(await page.evaluate(()=>window.signalErrors),[]);
   await page.evaluate(()=>window.peers.forEach(peer=>peer._cleanupWebRTC()));
   await page.close();

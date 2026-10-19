@@ -42,14 +42,14 @@ export function doorView(card, host, view, renderCall) {
     host._activeCallAttr('target_extension') === extension || host._activeCallAttr('remote_node_id') === `sip:${extension}`);
   return html`<section class="door-workspace">
     <div class="section-heading"><h2>${config.device_name || 'Door phone'}</h2><span>SIP ${extension || 'not configured'}</span></div>
-    <simson-door-camera .hass=${card._hass} .entity=${camera} .live=${callingDoor || card._doorPreview === true}></simson-door-camera>
-    <p class="fine-print">Video uses your Home Assistant camera. Calling uses the door’s registered SIP extension. Viewing never joins another call.</p>
+    ${camera && !callingDoor ? html`<simson-door-camera .hass=${card._hass} .entity=${camera} .live=${card._doorPreview === true}></simson-door-camera>` : nothing}
+    <p class="fine-print">SIP carries two-way audio and supported door-phone video. A linked RTSP source or HA camera preview is optional, not required.</p>
     ${callingDoor ? renderCall(host,view) : html`<div class="call-actions">
       <button class="primary" ?disabled=${!extension || !view.connected || view.hasCall || Boolean(host._actionPending)}
         @click=${()=>host._runAction('door:'+extension,()=>host._dialSIPExtension(extension))}>Call door phone</button>
       <button ?disabled=${!camera} aria-pressed=${card._doorPreview === true}
         @click=${()=>{card._doorPreview = !card._doorPreview; card.requestUpdate();}}>${card._doorPreview ? 'Stop video' : 'View live video'}</button>
     </div>`}
-    ${!extension ? html`<div class="notice">Set the SIP extension and select a camera in this card’s editor.</div>` : nothing}
+    ${!extension ? html`<div class="notice">Choose the door phone’s SIP extension in this card’s editor.</div>` : nothing}
   </section>`;
 }

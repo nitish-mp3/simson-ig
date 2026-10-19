@@ -167,6 +167,15 @@ _stopMediaPreview(render = true) {
     const remoteVideo = this._root()?.querySelector("#remote-video");
     if (remoteVideo && this._remoteStream?.getVideoTracks?.().length && remoteVideo.srcObject !== this._remoteStream) {
       remoteVideo.srcObject = this._remoteStream;
+      this._remoteVideoReady = false;
+      const ready = () => {
+        if (remoteVideo.srcObject === this._remoteStream && remoteVideo.videoWidth > 0 && !this._remoteVideoReady) {
+          this._remoteVideoReady = true;
+          this._render();
+        }
+      };
+      remoteVideo.onloadeddata = ready;
+      remoteVideo.requestVideoFrameCallback?.(ready);
       remoteVideo.play().catch(() => {});
     }
     const localVideo = this._root()?.querySelector("#local-video");

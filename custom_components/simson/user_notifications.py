@@ -2,11 +2,11 @@ from urllib.parse import urlencode, urlsplit, urlunsplit, parse_qsl
 import asyncio
 from collections import OrderedDict
 from .companion_targets import user_companion_devices
+from .notification_links import dashboard_path as safe_dashboard_path
 
 
 def incoming_notification(call_id, node_id, label, dashboard_path):
-    if not dashboard_path.startswith("/") or dashboard_path.startswith("//"):
-        dashboard_path = "/lovelace/default_view"
+    dashboard_path = safe_dashboard_path(dashboard_path)
     location = urlsplit(dashboard_path)
     def action_url(action):
         query = dict(parse_qsl(location.query))
@@ -14,7 +14,7 @@ def incoming_notification(call_id, node_id, label, dashboard_path):
         return urlunsplit(("", "", location.path, urlencode(query), location.fragment))
     return {"title": "Incoming Simson call", "message": f"{label or 'A user'} is calling you",
         "data": {"tag": f"simson_user_{call_id}", "persistent": True, "ttl": 0, "priority": "high",
-            "url": action_url("open"), "actions": [
+            "url": action_url("open"), "clickAction": action_url("open"), "actions": [
                 {"action": "URI", "title": "Answer", "uri": action_url("answer")},
                 {"action": "URI", "title": "Decline", "uri": action_url("decline")}]}}
 

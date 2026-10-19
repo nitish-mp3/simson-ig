@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import timedelta
-from urllib.parse import unquote, urlsplit, urlunsplit, parse_qsl, urlencode
+from urllib.parse import unquote
 
 import aiohttp
 import voluptuous as vol
@@ -23,6 +23,8 @@ from .api import SimsonApiClient
 from .call_access import can_control_call
 from .client_selection import client_for_node
 from .event_stream import setup_event_stream
+from .directory import register_directory
+from .videophones import setup_videophones
 from .user_notifications import async_setup_user_notifications
 from .user_calls import start_user_call
 from .frontend import async_register_card as _async_register_card
@@ -95,6 +97,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         hass.http.register_view(WebRTCConfigView(client, hass))
         _register_call_action_view(hass)
         _register_mobile_notification_actions(hass, entry, client)
+        register_directory(hass)
+        await setup_videophones(hass, entry)
         hass.data[DOMAIN][entry.entry_id]["event_stream_task"] = setup_event_stream(hass, entry, client, coordinator)
 
     except Exception:
@@ -130,7 +134,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                         SERVICE_HANGUP_CALL, SERVICE_WEBRTC_SIGNAL, SERVICE_GET_TARGETS,
                         SERVICE_USER_HEARTBEAT, SERVICE_GET_REMOTE_USERS,
                         SERVICE_GET_CALL_HISTORY, SERVICE_RUN_TRIGGER,
-                        SERVICE_TRANSFER_CALL, SERVICE_CONNECT_SIP_PHONES, "clear_stuck_calls", "call_user", "set_user_notification_target", "test_user_notification"):
+                        SERVICE_TRANSFER_CALL, SERVICE_CONNECT_SIP_PHONES, "clear_stuck_calls", "call_user", "set_user_notification_target", "test_user_notification", "configure_videophone"):
                 hass.services.async_remove(DOMAIN, svc)
     return unload_ok
 
@@ -205,99 +209,22 @@ class WebRTCConfigView(HomeAssistantView):
 
 
 class SimsonCallActionView(HomeAssistantView):
-    """Answer/reject/hang up one exact call, then open its HA dashboard."""
+    """Legacy notification navigation only; the authenticated frontend performs actions."""
 
     url = "/api/simson/call-action/{action}/{call_id}"
     name = "api:simson:call-action"
-    requires_auth = True
+    requires_auth = False
 
     def __init__(self, hass: HomeAssistant) -> None:
         self._hass = hass
 
     async def get(self, request: web.Request, action: str, call_id: str) -> web.Response:
-        action = str(action or "").strip().lower()
-        call_id = str(call_id or "").strip()
-        node_id = str(request.query.get("node_id") or "").strip()
-        redirect = str(request.query.get("redirect") or "/lovelace/default_view").strip()
-        if not redirect.startswith("/") or redirect.startswith("//"):
-            redirect = "/lovelace/default_view"
+        from .notification_links import handoff_url
+
         if action not in {"answer", "decline", "hangup"} or not call_id or len(call_id) > 160:
             raise web.HTTPBadRequest(text="Invalid Simson call action")
-
-        entries = []
-        for data in self._hass.data.get(DOMAIN, {}).values():
-            if not isinstance(data, dict) or not data.get("client"):
-                continue
-            coordinator = data.get("coordinator")
-            status = coordinator.data if coordinator and isinstance(coordinator.data, dict) else {}
-            matches_node = bool(node_id and str(status.get("node_id") or "") == node_id)
-            entries.append((not matches_node, data))
-        entries.sort(key=lambda item: item[0])
-
-        result = None
-        last_error: Exception | None = None
-        for _, data in entries:
-            client = data["client"]
-            try:
-                user = request.get("hass_user")
-                calls_data = await client.calls()
-                selected = next((item for item in calls_data.get("calls", []) if item.get("call_id") == call_id), None)
-                if selected is None:
-                    continue
-                if not user or not can_control_call(selected, user.id, "reject" if action == "decline" else action):
-                    raise web.HTTPForbidden(text="This call belongs to another user or is no longer available")
-                if action == "answer":
-                    result = await client.answer_call(call_id, answered_by_user_id=user.id, strict_call_id=True)
-                elif action == "decline":
-                    result = await client.reject_call(
-                        call_id,
-                        "declined_from_notification",
-                        strict_call_id=True,
-                        terminate_call=True,
-                    )
-                else:
-                    result = await client.hangup_call(call_id, strict_call_id=True)
-                coordinator = data.get("coordinator")
-                if coordinator:
-                    self._hass.async_create_task(coordinator.async_request_refresh())
-                break
-            except aiohttp.ClientResponseError as err:
-                last_error = err
-                if err.status == 404:
-                    continue
-                break
-            except web.HTTPForbidden:
-                raise
-            except Exception as err:  # noqa: BLE001 - shown as HA notification below
-                last_error = err
-                break
-
-        event_data = {
-            "action": action,
-            "call_id": call_id,
-            "node_id": node_id,
-            **(result or {}),
-        }
-        if result is None:
-            event_data["error"] = str(last_error or "call is no longer available")
-            await self._hass.services.async_call(
-                "persistent_notification",
-                "create",
-                {
-                    "notification_id": f"simson_action_{call_id[:32]}",
-                    "title": "Simson call action failed",
-                    "message": f"Could not {action} this call: {event_data['error']}",
-                },
-                blocking=False,
-            )
-        self._hass.bus.async_fire("simson_notification_action_result", event_data)
-        if result is not None and action == "answer":
-            location = urlsplit(redirect)
-            query = dict(parse_qsl(location.query))
-            query["simson_answer"] = call_id
-            query["simson_node"] = node_id
-            redirect = urlunsplit(("", "", location.path, urlencode(query), location.fragment))
-        raise web.HTTPFound(location=redirect)
+        raise web.HTTPFound(location=handoff_url(action, call_id,
+            request.query.get("node_id", ""), request.query.get("redirect", "/simson-call")))
 
 
 def _register_call_action_view(hass: HomeAssistant) -> None:
@@ -361,7 +288,7 @@ def _register_services(hass: HomeAssistant, client: SimsonApiClient) -> None:
 
     if not hass.services.has_service(DOMAIN, "call_user"):
         hass.services.async_register(DOMAIN, "call_user", handle_call_user,
-            schema=vol.Schema({vol.Required("entity_id"): str,
+            schema=vol.Schema({vol.Optional("entity_id"): str, vol.Optional("target_user_id"): str, vol.Optional("node_id"): str,
                 vol.Optional("call_type", default="voice"): vol.In(["voice", "video"]),
                 vol.Optional("caller_user_id", default=""): str}))
 

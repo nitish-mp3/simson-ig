@@ -1,5 +1,6 @@
 import { ownsCall } from '../state/call-ownership.js';
 import { canonicalNodeId, nodeEntity } from '../state/node-identity.js';
+import { authenticatedGet } from '../transport/ha-api.js';
 
 export const withHomeAssistant = Base => class extends Base {
 _autoDetectNodeId() {
@@ -375,6 +376,27 @@ async _loadTargets() {
       await this._hass.callService("simson", "get_targets", {});
     } catch (e) {
       this._targetsLoading = false;
+    }
+  }
+
+async _loadPeople(force = false) {
+    const node = this._nodeId();
+    if (!node || this._peopleLoading || (!force && this._peopleAttemptNode === node && Date.now() - (this._peopleFetchedAt || 0) < 30000)) return;
+    this._peopleLoading = true;
+    this._peopleAttemptNode = node;
+    try {
+      const result = await authenticatedGet(this._hass, 'simson/users?node_id=' + encodeURIComponent(node));
+      if (node !== this._nodeId() || result.node_id !== node) return;
+      this._localUsers = result.users || [];
+      this._videoProfiles = result.videophones || [];
+      this._peopleNode = node;
+      this._peopleError = '';
+    } catch {
+      this._peopleError = 'Directory unavailable. Showing available contact entities.';
+    } finally {
+      this._peopleFetchedAt = Date.now();
+      this._peopleLoading = false;
+      this._render();
     }
   }
 
