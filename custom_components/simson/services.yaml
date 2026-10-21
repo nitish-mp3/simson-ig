@@ -395,6 +395,171 @@ test_user_notification:
           integration: simson
           domain: sensor
 
+get_room_configuration:
+  name: Get Room Workspace Configuration
+  description: Signed-in administrators only. Returns saved room profiles, revisions, current sessions, available Simson sites and active HA users for the graphical room workspace. Does not place calls.
+
+configure_room:
+  name: Configure Room Endpoint
+  description: Administrator-only. Bind a room identity to separate audio, video and display devices. SIP/split media require working start and cleanup adapter scripts; a camera entity alone is not a video publisher.
+  fields:
+    node_id: &room_node
+      required: true
+      selector:
+        text:
+    room_id: &room_id
+      required: true
+      example: room-101
+      selector:
+        text:
+    label:
+      selector:
+        text:
+    room_user_id:
+      description: Dedicated active HA user representing this room, not a shared caregiver login.
+      selector:
+        text:
+    caregiver_user_id:
+      selector:
+        text:
+    audio_mode:
+      default: browser
+      selector:
+        select:
+          options: [browser, sip]
+    video_mode:
+      default: none
+      selector:
+        select:
+          options: [none, browser, adapter]
+    sip_extension:
+      selector:
+        text:
+    camera_entity:
+      description: Discoverable source binding. Adapter must publish its video into the call; selecting it does not do so automatically.
+      selector:
+        entity:
+          domain: camera
+    display_entity:
+      selector:
+        entity:
+          domain: [media_player, remote]
+    start_script:
+      description: Receives session_id, room_id, identities, devices, call_id and audio_policy. Must return promptly and report real component readiness.
+      selector:
+        entity:
+          domain: script
+    stop_script:
+      description: Idempotent session-scoped cleanup; must report stopped for every configured split-device component.
+      selector:
+        entity:
+          domain: script
+    trigger_entity:
+      description: Optional physical panic sensor, helper, button or event; configured in the room workspace.
+      selector:
+        entity:
+          domain: [binary_sensor, input_boolean, input_button, button, event]
+    trigger_enabled:
+      default: false
+      selector:
+        boolean:
+    trigger_mode:
+      default: state
+      selector:
+        select:
+          options: [state, press]
+    trigger_state:
+      default: "on"
+      selector:
+        text:
+    trigger_cooldown_sec:
+      default: 30
+      selector:
+        number:
+          min: 1
+          max: 3600
+          unit_of_measurement: s
+    expected_revision:
+      description: Optional optimistic concurrency guard used by the room workspace; stale saves are rejected rather than overwriting another administrator's edit.
+      selector:
+        number:
+          min: 0
+    setup_timeout_sec:
+      default: 60
+      selector:
+        number:
+          min: 15
+          max: 300
+          unit_of_measurement: s
+    max_duration_sec:
+      default: 3600
+      selector:
+        number:
+          min: 60
+          max: 14400
+          unit_of_measurement: s
+    remove:
+      default: false
+      selector:
+        boolean:
+
+start_room_call:
+  name: Call Room Caregiver
+  description: Start one coordinated room session. Uses the configured room identity and targeted user notification, not a broadcast. Trusted automations, the room user and administrators may start it.
+  fields:
+    node_id: *room_node
+    room_id: *room_id
+    request_id:
+      description: Stable ID for one panic/button activation. Reuse only when retrying that same activation; duplicate requests return the current result without dialing again.
+      selector:
+        text:
+    target_user_id:
+      description: Optional alternate caregiver HA user on this node.
+      selector:
+        text:
+
+end_room_call:
+  name: End Room Session
+  description: Release only this session's exact call and configured media/display adapters. Cleanup failures retain attention state and block reuse.
+  fields:
+    node_id: *room_node
+    room_id: *room_id
+    session_id: &room_session
+      required: true
+      description: Current session_id from the room sensor; stale commands cannot end a replacement call.
+      selector:
+        text:
+
+bind_room_call:
+  name: Bind Adapter Call to Room
+  description: Link an adapter-created live Simson call to this starting session. The call must belong to the room's user identity. Never pass an extension as a call ID.
+  fields:
+    node_id: *room_node
+    room_id: *room_id
+    session_id: *room_session
+    call_id:
+      required: true
+      selector:
+        text:
+
+report_room_component:
+  name: Report Room Component State
+  description: Adapter acknowledgement for the exact session. Report video ready only after decoded frames, audio ready after connected media, and display ready after the designated screen acknowledges navigation.
+  fields:
+    node_id: *room_node
+    room_id: *room_id
+    session_id: *room_session
+    component:
+      required: true
+      selector:
+        select:
+          options: [audio, video, display]
+    state:
+      required: true
+      selector:
+        select:
+          options: [pending, ready, failed, stopped]
+
 configure_videophone:
   name: Link Videophone Video Source
   description: Administrator-only. Link a SIP extension to a named go2rtc RTSP stream. SIP audio stays separate; video requires an owned active call. Configure RTSP credentials in the bridge, not in dashboard YAML.

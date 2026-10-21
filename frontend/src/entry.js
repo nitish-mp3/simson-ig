@@ -1,5 +1,6 @@
 import { SimsonCardShell } from './shell.js';
 import { SimsonCallPanel } from './panel.js';
+import { SimsonRoomCard } from './room-card.js';
 
 for (const name of ['simson-relay-card', 'simson-card', 'simson-call-card']) {
   if (!customElements.get(name)) customElements.define(name, class extends SimsonCardShell {});
@@ -14,3 +15,5 @@ for (const [name, view] of [['simson-dial-card','dial'],['simson-live-call-card'
 }
 if (Array.isArray(window.customCards) && !window.customCards.some(card => card.type === 'simson-relay-card')) window.customCards.push({type:'simson-relay-card',name:'Simson',description:'Calls, contacts and browser media',preview:true});
 if (!customElements.get('simson-call-panel')) customElements.define('simson-call-panel', SimsonCallPanel);
+if (!customElements.get('simson-room-card')) customElements.define('simson-room-card', SimsonRoomCard);
+if (Array.isArray(window.customCards) && !window.customCards.some(card => card.type === 'simson-room-card')) window.customCards.push({type:'simson-room-card',name:'Simson room',description:'Coordinated room audio, video and display status',preview:true});

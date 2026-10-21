@@ -564,6 +564,139 @@ for (const sameNode of [false,true]) test(`${sameNode ? 'two users on one node' 
   await page.close();
 });
 
+async function loadRoomWorkspace(page, count=0) {
+  await load(page);
+  await page.evaluate(count=>{
+    window.roomRPC=[];window.roomActions=[];
+    window.roomData={nodes:[{node_id:'office',label:'Care site',connected:true,rooms:[]}],
+      users:[{user_id:'room',label:'Room TV login'},{user_id:'caregiver',label:'Caregiver phone'}]};
+    for(let index=0;index<count;index++)window.roomData.nodes[0].rooms.push({room_id:'room-'+index,label:'Room '+String(index).padStart(3,'0'),
+      revision:1,room_user_id:'room',caregiver_user_id:'caregiver',audio_mode:'browser',video_mode:'none',
+      setup_timeout_sec:60,max_duration_sec:3600});
+    window.roomHass={...window.mockHass,user:{id:'admin',is_admin:true},states:{...window.mockHass.states,
+      'camera.room':{entity_id:'camera.room',state:'idle',attributes:{friendly_name:'Room camera'}},
+      'media_player.room_tv':{entity_id:'media_player.room_tv',state:'on',attributes:{friendly_name:'Room television'}},
+      'input_boolean.panic':{entity_id:'input_boolean.panic',state:'off',attributes:{friendly_name:'Panic trigger'}}},
+      callWS:async request=>{
+        window.roomRPC.push(request);
+        if(request.service==='get_room_configuration')return {response:structuredClone(window.roomData)};
+        if(request.service==='configure_room'){
+          const data=request.service_data;const rooms=window.roomData.nodes[0].rooms;
+          const index=rooms.findIndex(room=>room.room_id===data.room_id);
+          if(window.roomConflict)throw Error('This room was changed in another window. Reload it before saving.');
+          if(data.remove){rooms.splice(index,1);return {response:{room_id:data.room_id}};}
+          const profile={...data,revision:(index>=0?rooms[index].revision:0)+1};
+          if(index>=0)rooms[index]=profile;else rooms.push(profile);
+          return {response:{room_id:data.room_id}};
+        }
+      },callService:async(domain,service,data)=>{
+        if(!['start_room_call','end_room_call'].includes(service))return;
+        window.roomActions.push({domain,service,data});
+        const room=window.roomData.nodes[0].rooms.find(room=>room.room_id===data.room_id);
+        room.session=service==='start_room_call'?{state:'ringing',session_id:'only-this-session'}:{state:'ended',session_id:'only-this-session'};
+      }};
+    const panel=document.createElement('simson-call-panel');panel.hass=window.roomHass;
+    document.getElementById('mount').style.maxWidth='none';
+    document.getElementById('mount').replaceChildren(panel);
+  },count);
+  await page.getByRole('button',{name:'Room setup',exact:true}).click();
+  await page.getByRole('heading',{name:'Room workspace'}).waitFor();
+  await page.getByRole('button',{name:'Add room',exact:true}).waitFor({state:'visible'});
+}
+
+test('room workspace creates, edits, duplicates and deletes room bindings without YAML or test calls',async()=>{
+  const page=await browser.newPage({viewport:{width:1240,height:1024}});await loadRoomWorkspace(page);
+  await page.getByRole('button',{name:'Add room',exact:true}).click();
+  await page.locator('input[name=label]').fill('Room 101');
+  await page.locator('select[name=room_user_id]').selectOption('room');
+  await page.locator('select[name=caregiver_user_id]').selectOption('caregiver');
+  await page.locator('input[name=trigger_entity]').fill('input_boolean.panic');
+  await page.locator('input[name=trigger_enabled]').check();
+  await page.getByRole('button',{name:'Save room',exact:true}).click();
+  await page.getByText('Room saved. Its entities and enabled trigger are updated automatically.').waitFor();
+  const first=await page.evaluate(()=>window.roomRPC.find(request=>request.service==='configure_room').service_data);
+  assert.equal(first.room_id,'room-101');assert.equal(first.expected_revision,0);
+  assert.equal(first.trigger_entity,'input_boolean.panic');assert.equal(first.trigger_enabled,true);
+  assert.equal(await page.locator('select[name=room_user_id]').inputValue(),'room');
+  assert.equal(await page.locator('select[name=caregiver_user_id]').inputValue(),'caregiver');
+  assert.equal(await page.evaluate(()=>window.roomActions.length),0);
+  await page.locator('input[name=label]').fill('East wing room');
+  await page.getByRole('button',{name:'Save room',exact:true}).click();
+  await page.waitForFunction(()=>window.roomData.nodes[0].rooms[0].revision===2);
+  await page.getByRole('button',{name:'Call caregiver',exact:true}).click();
+  await page.getByText('This room has an open session. End it before changing its bindings.').waitFor();
+  assert.equal(await page.getByRole('button',{name:'Save room',exact:true}).isDisabled(),true);
+  await page.getByRole('button',{name:'End session / retry cleanup',exact:true}).click();
+  await page.getByRole('button',{name:'Call caregiver',exact:true}).waitFor();
+  assert.equal(await page.evaluate(()=>window.roomActions[1].data.session_id),'only-this-session');
+  await page.screenshot({path:path.join(integrationRoot,'frontend/test-results/room-workspace-desktop.png'),fullPage:true});
+  await page.getByRole('button',{name:'Duplicate setup',exact:true}).click();
+  assert.equal(await page.locator('input[name=label]').inputValue(),'');
+  assert.equal(await page.locator('select[name=room_user_id]').inputValue(),'');
+  assert.equal(await page.locator('input[name=trigger_enabled]').isChecked(),false);
+  await page.getByRole('button',{name:/East wing room/}).click();
+  await page.getByRole('button',{name:'Remove room',exact:true}).click();
+  await page.getByRole('button',{name:'Confirm removal',exact:true}).click();
+  await page.getByText('Room removed. Its trigger is no longer active.').waitFor();
+  assert.equal(await page.evaluate(()=>window.roomData.nodes[0].rooms.length),0);
+  await page.close();
+});
+
+test('room workspace paginates on mobile, preserves conflicting drafts and denies non-admin setup',async()=>{
+  const page=await browser.newPage({viewport:{width:390,height:844}});await loadRoomWorkspace(page,18);
+  const settings=page.locator('simson-room-settings');
+  assert.equal(await settings.locator('button.room').count(),8);
+  await page.getByRole('button',{name:'Next',exact:true}).click();
+  await page.getByRole('button',{name:/Room 008/}).waitFor();
+  await page.getByRole('searchbox',{name:'Find a room'}).fill('017');
+  assert.equal(await settings.locator('button.room').count(),1);
+  await page.getByRole('button',{name:/Room 017/}).click();
+  await page.locator('input[name=label]').fill('Unsaved room name');
+  await page.evaluate(()=>window.roomConflict=true);
+  await page.getByRole('button',{name:'Save room',exact:true}).click();
+  await page.getByRole('alert').filter({hasText:'another window'}).waitFor();
+  assert.equal(await page.locator('input[name=label]').inputValue(),'Unsaved room name');
+  assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
+  await page.screenshot({path:path.join(integrationRoot,'frontend/test-results/room-workspace-mobile.png'),fullPage:true});
+  await page.evaluate(()=>{
+    const panel=document.querySelector('simson-call-panel');panel.hass={...window.roomHass,user:{id:'observer',is_admin:false}};
+  });
+  assert.equal(await page.getByRole('button',{name:'Room setup',exact:true}).isVisible(),false);
+  await page.close();
+});
+
+test('room controller stays compact on mobile, escapes names and scopes cleanup to the exact session',async()=>{
+  const page=await browser.newPage({viewport:{width:360,height:740}});
+  await load(page);
+  await page.evaluate(()=>{
+    const card=document.createElement('simson-room-card');
+    card.setConfig({entity:'sensor.room'});
+    window.roomCalls=[];
+    window.roomHass={states:{'sensor.room':{state:'idle',attributes:{simson_room:true,node_id:'office',room_id:'101',
+      friendly_name:'<img src=x onerror=alert(1)>',audio_mode:'sip',video_mode:'adapter'}}},
+      callService:async(...args)=>window.roomCalls.push(args)};
+    card.hass=window.roomHass;document.getElementById('mount').replaceChildren(card);
+  });
+  const card=page.locator('simson-room-card');
+  assert.equal(await card.locator('img').count(),0);
+  await card.getByRole('button',{name:'Call caregiver'}).click();
+  assert.equal(await page.evaluate(()=>window.roomCalls[0][1]),'start_room_call');
+  assert.equal(await page.evaluate(()=>window.roomCalls[0][2].room_id),'101');
+  await page.evaluate(()=>{
+    window.roomHass.states['sensor.room']={state:'attention',attributes:{...window.roomHass.states['sensor.room'].attributes,
+      friendly_name:'Room 101',
+      session_id:'exact-session',call_id:'exact-call',components:{audio:'ready',video:'failed',display:'pending'},
+      reason:'Camera unavailable; audio remains connected'}};
+    document.querySelector('simson-room-card').hass={...window.roomHass};
+  });
+  await card.getByRole('button',{name:'Retry cleanup'}).click();
+  assert.deepEqual(await page.evaluate(()=>window.roomCalls[1]),['simson','end_room_call',
+    {node_id:'office',room_id:'101',session_id:'exact-session'}]);
+  assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
+  await page.screenshot({path:path.join(integrationRoot,'frontend/test-results/room-mobile.png')});
+  await page.close();
+});
+
 test('both users can add cameras during an established voice call without losing audio',async()=>{
   const page=await browser.newPage();await load(page);
   await page.evaluate(async()=>{

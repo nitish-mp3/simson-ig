@@ -25,6 +25,7 @@ from .client_selection import client_for_node
 from .event_stream import setup_event_stream
 from .directory import register_directory
 from .videophones import setup_videophones
+from .rooms import setup_rooms
 from .user_notifications import async_setup_user_notifications
 from .user_calls import start_user_call
 from .frontend import async_register_card as _async_register_card
@@ -84,6 +85,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             "coordinator": coordinator,
         }
 
+        await setup_rooms(hass, entry)
+
         await hass.config_entries.async_forward_entry_setups(
             entry, [Platform.SENSOR, Platform.BUTTON]
         )
@@ -111,7 +114,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a Simson config entry."""
     unload_ok = await hass.config_entries.async_unload_platforms(
-        entry, [Platform.SENSOR]
+        entry, [Platform.SENSOR, Platform.BUTTON]
     )
     if unload_ok:
         data = hass.data[DOMAIN].pop(entry.entry_id, None)
@@ -135,6 +138,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                         SERVICE_USER_HEARTBEAT, SERVICE_GET_REMOTE_USERS,
                         SERVICE_GET_CALL_HISTORY, SERVICE_RUN_TRIGGER,
                         SERVICE_TRANSFER_CALL, SERVICE_CONNECT_SIP_PHONES, "clear_stuck_calls", "call_user", "set_user_notification_target", "test_user_notification", "configure_videophone"):
+                hass.services.async_remove(DOMAIN, svc)
+            for svc in ("configure_room", "start_room_call", "end_room_call", "bind_room_call", "report_room_component", "get_room_configuration"):
                 hass.services.async_remove(DOMAIN, svc)
     return unload_ok
 

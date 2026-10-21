@@ -181,6 +181,12 @@ automation:
                 title: "Reject"
 ```
 
+### Coordinated room endpoints
+
+See [Room calling](ROOM_CALLING.md) for separate audio/video/display bindings,
+room sensors and actions, the room card, adapter requirements and deployment
+limitations. A linked camera entity is not automatically published into a call.
+
 ### Auto-answer intercom calls
 
 ```yaml

@@ -13,6 +13,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
+from .rooms import session_snapshot
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +63,23 @@ async def async_setup_entry(
 
     add_contacts()
     entry.async_on_unload(coordinator.async_add_listener(add_contacts))
+    known_rooms = set()
+
+    def add_rooms():
+        rooms = data.get("rooms")
+        if not rooms:
+            return
+        new_rooms = []
+        for room_id in rooms.profiles:
+            if room_id not in known_rooms:
+                known_rooms.add(room_id)
+                new_rooms.append(SimsonRoomSensor(coordinator, entry, rooms, room_id))
+        if new_rooms:
+            async_add_entities(new_rooms, True)
+
+    data.setdefault("room_listeners", []).append(add_rooms)
+    entry.async_on_unload(lambda: data["room_listeners"].remove(add_rooms))
+    add_rooms()
 
 
 class SimsonBaseSensor(CoordinatorEntity, SensorEntity):
@@ -83,6 +101,44 @@ class SimsonBaseSensor(CoordinatorEntity, SensorEntity):
             "model": "Simson Call Relay",
             "sw_version": "1.0.0",
         }
+
+
+class SimsonRoomSensor(SimsonBaseSensor):
+    _attr_icon = "mdi:home-account"
+
+    def __init__(self, coordinator, entry, rooms, room_id):
+        super().__init__(coordinator, entry)
+        self._rooms = rooms
+        self._room_id = room_id
+        self._attr_unique_id = f"{entry.entry_id}_room_{room_id}"
+
+    async def async_added_to_hass(self):
+        await super().async_added_to_hass()
+        listeners = self.hass.data[DOMAIN][self._entry.entry_id]["room_listeners"]
+        listeners.append(self.async_write_ha_state)
+        self.async_on_remove(lambda: listeners.remove(self.async_write_ha_state))
+
+    @property
+    def name(self):
+        return self._rooms.profiles.get(self._room_id, {}).get("label", self._room_id)
+
+    @property
+    def available(self):
+        return super().available and self._room_id in self._rooms.profiles
+
+    @property
+    def native_value(self):
+        return (self._rooms.current(self._room_id) or {}).get("state", "idle")
+
+    @property
+    def extra_state_attributes(self):
+        profile = self._rooms.profiles.get(self._room_id, {})
+        return {"simson_room": True, "room_id": self._room_id,
+            "node_id": (self.coordinator.data or {}).get("node_id", ""),
+            **{key: profile.get(key, "") for key in ("room_user_id", "caregiver_user_id", "audio_mode", "video_mode",
+                "sip_extension", "camera_entity", "display_entity", "trigger_entity", "trigger_enabled", "trigger_mode",
+                "trigger_state", "trigger_cooldown_sec", "revision")},
+            **(session_snapshot(self._rooms.current(self._room_id)) or {})}
 
 
 class SimsonUserContactSensor(SimsonBaseSensor):

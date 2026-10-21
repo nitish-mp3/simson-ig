@@ -13,7 +13,7 @@ from homeassistant.components.lovelace.const import LOVELACE_DATA, MODE_STORAGE
 from homeassistant.core import HomeAssistant
 
 _LOGGER = logging.getLogger(__name__)
-CARD_VERSION = "5.4.0"
+CARD_VERSION = "5.6.0"
 CARD_PATH = "/simson/www/simson-card.js"
 CARD_URL = f"{CARD_PATH}?v={CARD_VERSION}"
 _RESOURCE_PATHS = {CARD_PATH, "/local/simson-call-card.js", "/local/simson-card.js", "/simson/www/simson-call-card.js"}
@@ -33,7 +33,8 @@ async def async_register_card(hass: HomeAssistant) -> None:
                 add_extra_js_url(hass, CARD_URL)
                 state["script_registered"] = True
             if not state.get("panel_registered"):
-                await async_register_panel(hass, "simson-call", "simson-call-panel", module_url=CARD_URL)
+                await async_register_panel(hass, "simson-call", "simson-call-panel", module_url=CARD_URL,
+                    sidebar_title="Simson", sidebar_icon="mdi:phone-in-talk")
                 state["panel_registered"] = True
             if not state.get("resource_registered"):
                 state["resource_registered"] = await async_register_resource(hass)

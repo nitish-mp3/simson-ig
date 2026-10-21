@@ -8,7 +8,7 @@ import { VERSION } from './src/version.js';
 const root = path.dirname(fileURLToPath(import.meta.url));
 const out = path.resolve(root, '../custom_components/simson/www');
 const options = {absWorkingDir:root,bundle:true,format:'esm',target:['es2022'],minify:true,legalComments:'none',metafile:true,write:false,outdir:out};
-const runtime = await build({...options,entryPoints:{card:'src/card.js',editor:'src/editor.js'},splitting:true,loader:{'.css':'text'},entryNames:'chunks/[name]-[hash]',chunkNames:'chunks/[name]-[hash]'});
+const runtime = await build({...options,entryPoints:{card:'src/card.js',editor:'src/editor.js',rooms:'src/room-settings.js'},splitting:true,loader:{'.css':'text'},entryNames:'chunks/[name]-[hash]',chunkNames:'chunks/[name]-[hash]'});
 const asset = source => {
   const output = Object.entries(runtime.metafile.outputs).find(([,value])=>value.entryPoint===source);
   if(!output)throw Error('Missing runtime asset: '+source);
@@ -16,7 +16,7 @@ const asset = source => {
 };
 const bootstrap = await build({...options,entryPoints:{'simson-card':'src/entry.js'},splitting:false});
 const entry = bootstrap.outputFiles[0];
-entry.contents = Buffer.from(entry.text.replaceAll('__SIMSON_CARD_CHUNK__',asset('src/card.js')).replaceAll('__SIMSON_EDITOR_CHUNK__',asset('src/editor.js')));
+entry.contents = Buffer.from(entry.text.replaceAll('__SIMSON_CARD_CHUNK__',asset('src/card.js')).replaceAll('__SIMSON_EDITOR_CHUNK__',asset('src/editor.js')).replaceAll('__SIMSON_ROOMS_CHUNK__',asset('src/room-settings.js')));
 if(entry.contents.length>12000)throw Error('Registration bundle exceeds 12 KB budget');
 const files = [...bootstrap.outputFiles,...runtime.outputFiles];
 const assets = runtime.outputFiles.map(file=>path.relative(out,file.path).split(path.sep).join('/'));

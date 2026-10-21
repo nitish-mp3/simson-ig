@@ -58,7 +58,8 @@ class FrontendRegistrationTests(unittest.IsolatedAsyncioTestCase):
         await self.frontend.async_register_card(self.hass)
         await self.frontend.async_register_card(self.hass)
         self.frontend.async_register_panel.assert_awaited_once_with(
-            self.hass, "simson-call", "simson-call-panel", module_url=self.frontend.CARD_URL
+            self.hass, "simson-call", "simson-call-panel", module_url=self.frontend.CARD_URL,
+            sidebar_title="Simson", sidebar_icon="mdi:phone-in-talk"
         )
 
     async def test_resource_failure_does_not_repeat_static_registration(self):

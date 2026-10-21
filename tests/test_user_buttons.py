@@ -46,3 +46,12 @@ async def test_button_identity_availability_and_authenticated_context(monkeypatc
         {"entity_id": "button.call_recipient"}, blocking=True, context=button._context)
     coordinator.data["local_users"] = []
     assert not button.available
+    rooms = SimpleNamespace(profiles={"101": {"label": "Room 101"}},
+        current=lambda room_id: {"session_id": "current-session"})
+    room_button = module.SimsonRoomButton(coordinator, entry, rooms, "101", "end_room_call")
+    room_button.hass = button.hass
+    room_button._context = button._context
+    await room_button.async_press()
+    room_button.hass.services.async_call.assert_awaited_with("simson", "end_room_call",
+        {"node_id": "office", "room_id": "101", "session_id": "current-session"},
+        blocking=True, context=room_button._context)

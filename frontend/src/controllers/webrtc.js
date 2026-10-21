@@ -1,5 +1,6 @@
 import { ICE_SERVERS } from '../transport/ice.js';
 import { authenticatedGet } from '../transport/ha-api.js';
+import { reportRoomMedia } from '../transport/room-media.js';
 export const withWebRTC = Base => class extends Base {
 async _fetchWebRTCConfig() {
     const callId = this._currentCallId || '';
@@ -260,6 +261,7 @@ _cleanupWebRTC({endCall=false}={}) {
     this._audioQuality = 3;
     this._connectionType = "";
     this._pendingCandidates = [];
+    this._roomMediaReports?.clear();
     this._ignoreOffer = false;
     this._isSettingRemoteAnswerPending = false;
     if(endCall){this._isCaller=false;this._answeredByMe=false;this._answerPendingCallId=null;this._initiatedHere=false;}
@@ -306,7 +308,11 @@ _attachRemoteAudio(stream, track = null) {
 async _updateQuality() {
     if (!this._pc) return;
     try {
-      const stats = await this._pc.getStats();
+      const peer = this._pc;
+      const callId = this._currentCallId;
+      const stats = await peer.getStats();
+      if (this._pc !== peer || this._currentCallId !== callId) return;
+      await reportRoomMedia(this, stats);
       let jitter = 0, packetsLost = 0, packetsReceived = 0;
       stats.forEach(report => {
         if (report.type === "inbound-rtp" && report.kind === "audio") {
