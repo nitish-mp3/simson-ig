@@ -10,6 +10,7 @@ class RoomTriggers:
         self.now = now
         self.last = {}
         self.bindings = {}
+        self.pending = {}
         self.refresh()
 
     def refresh(self):
@@ -49,11 +50,26 @@ class RoomTriggers:
             self.last[room_id] = now
             request_id = f"{event.context.id}:{after.last_changed.isoformat()}"[:128]
             payload = {"room_id": room_id, "entity_id": entity_id, "request_id": request_id}
+            self.pending[(room_id, request_id)] = (dict(payload), dict(profile), now)
+            while len(self.pending) > 256:
+                self.pending.pop(next(iter(self.pending)))
             self.emit("simson_room_triggered", payload)
-            try:
-                await self.start(room_id, request_id)
-            except Exception:
-                self.emit("simson_room_trigger_failed", {**payload, "reason": "Room call could not start; check room status. The independent caregiver alert should still run."})
+
+    async def consume(self, event):
+        payload = event.data
+        key = (payload.get("room_id"), payload.get("request_id"))
+        receipt = self.pending.get(key)
+        if not receipt or any(payload.get(field) != receipt[0][field] for field in receipt[0]):
+            return
+        self.pending.pop(key)
+        room_id, request_id = key
+        profile = self.profiles.get(room_id, {})
+        if profile != receipt[1] or not profile.get("trigger_enabled") or self.now() - receipt[2] > 30:
+            return
+        try:
+            await self.start(room_id, request_id)
+        except Exception:
+            self.emit("simson_room_trigger_failed", {**receipt[0], "reason": "Room call could not start; check room status. The independent caregiver alert should still run."})
 
 
 def setup_room_triggers(hass, entry, owner):
@@ -68,9 +84,16 @@ def setup_room_triggers(hass, entry, owner):
     triggers = RoomTriggers(owner["rooms"].profiles, start, emit)
 
     async def handle(event):
-        if hass.is_running:
+        entity_id = event.data.get("entity_id", "")
+        manual_press = entity_id.split(".", 1)[0] in ("input_button", "button") and bool(getattr(event.context, "user_id", None))
+        if hass.is_running or manual_press:
             await triggers.handle(event)
+
+    async def consume(event):
+        if event.data.get("node_id") == (owner["coordinator"].data or {}).get("node_id"):
+            await triggers.consume(event)
 
     owner["room_listeners"].append(triggers.refresh)
     entry.async_on_unload(lambda: owner["room_listeners"].remove(triggers.refresh))
     entry.async_on_unload(hass.bus.async_listen("state_changed", handle))
+    entry.async_on_unload(hass.bus.async_listen("simson_room_triggered", consume))

@@ -63,7 +63,7 @@ _onHAUserCallStarted(event) {
     this._isCaller = true;
     clearTimeout(this._outgoingUiTimer);
     this._eventCallSnapshot = {...event, ...this._eventCallSnapshot, call_id:event.call_id,
-      direction:'outgoing', state:this._eventCallSnapshot?.state || 'requesting'};
+      direction:'outgoing', state:this._eventCallSnapshot?.state || 'requesting', _receivedAt:Date.now()};
     if (!initiatedLocally) this._showCallDialog = true;
     this._render();
   }
@@ -86,7 +86,7 @@ _onHACallStatus(event) {
     if (!isMyEvent) return;
     if (this._currentCallId && call_id !== this._currentCallId) return;
     if (['requesting','ringing','active'].includes(status)) {
-      this._eventCallSnapshot = {...this._eventCallSnapshot, ...event, state: status};
+      this._eventCallSnapshot = {...this._eventCallSnapshot, ...event, state: status, _receivedAt:Date.now()};
     }
     if (call_type) this._currentCallType = call_type;
     clearTimeout(this._outgoingUiTimer);
@@ -338,8 +338,12 @@ _visibleCall() {
     const userId = this._hass?.user?.id || '';
     const calls = this._attr('calls_count', 'active_calls', []) || [];
     const sensor = this._entity('call_state');
-    const candidates = [this._eventCallSnapshot, ...calls, {...sensor?.attributes, state: sensor?.state}]
-      .filter(call=>call && !this._endedCallIds?.has(call.call_id));
+    const snapshot=this._eventCallSnapshot, count=this._entity('calls_count');
+    const snapshotEnded=snapshot?._receivedAt&&Date.now()-snapshot._receivedAt>5000&&this._isConnected()&&
+      count?.state==='0'&&Date.parse(count.last_updated)>snapshot._receivedAt;
+    const candidates = [snapshotEnded?null:snapshot, ...calls, {...sensor?.attributes, state: sensor?.state}]
+      .filter(call=>call && !this._endedCallIds?.has(call.call_id))
+      .sort((first,second)=>Number(second.state==='active'||second.status==='active')-Number(first.state==='active'||first.status==='active'));
     const selected = candidates.find(call => call.call_id === this._currentCallId &&
       ownsCall(call, userId, this._currentCallId)) ||
       candidates.find(call => ownsCall(call, userId, this._currentCallId));

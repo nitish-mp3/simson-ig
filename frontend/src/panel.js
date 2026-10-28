@@ -14,6 +14,7 @@ export class SimsonCallPanel extends HTMLElement {
     this._roomsButton=document.createElement('button');this._roomsButton.textContent='Room setup';this._roomsButton.hidden=true;this._roomsButton.onclick=()=>this._show(true);
     nav.append(this._callButton,this._roomsButton);
     this._roomHost=document.createElement('section');this._roomHost.hidden=true;
+    this._roomHost.addEventListener('simson-room-browser-start',event=>{this._show(false);this._settings?.joinSource(this._card,event.detail).catch(()=>{});});
     main.append(nav,this._card,this._roomHost);
     this.shadowRoot.append(style,main);
   }

@@ -1,6 +1,6 @@
 # Room endpoints and split-device calling
 
-Integration 3.6.0 / card 5.6.0 adds a graphical room workspace and room **control plane**. A room is not a
+Integration 3.9.0 / card 5.9.0 / addon 5.1.13 adds native SIP room audio alongside independent camera video and video-only Cast screens. The VPS must expose the authenticated native SIP-room capability before saving this mode. A room is not a
 particular TV model and a caregiver does not need matching room hardware: the
 caregiver uses their existing Home Assistant phone/browser contact.
 
@@ -25,8 +25,11 @@ caregiver uses their existing Home Assistant phone/browser contact.
 - Native browser-to-caregiver calling through the existing targeted user-call
   path and its Companion notifications. The room browser must use the room's
   dedicated HA login; caregiver identity is not replaced with the TV login.
-- An adapter contract for separate SIP audio, video publishing and screen
-  navigation. Adapter readiness is acknowledged, never inferred from a camera
+- Native SIP audio with an editable registered handset extension, independent
+  HA camera reception on the caregiver, and caregiver-camera publishing to Cast.
+  No room computer or adapter scripts are required for this combination.
+- An adapter contract for custom audio/video publishing and screen
+  navigation. Readiness is acknowledged, never inferred from a camera
   being displayed or a script merely returning successfully.
 - Duplicate-request protection, shared-device busy guards, setup/call-duration
   limits, peer-end reconciliation, session-scoped cleanup, retry backoff,
@@ -36,13 +39,39 @@ caregiver uses their existing Home Assistant phone/browser contact.
 
 ## Important deployment boundary
 
-This is **not** a new SIP/video mixer or an Android TV camera driver. Browser
-audio/video uses the existing Simson WebRTC implementation. Split SIP + TV +
-network-camera rooms require a working site-specific media/display adapter.
-The new room manager coordinates that adapter; it does not convert an arbitrary
-HA camera into an outgoing call track. `camera_entity` is a discoverable binding,
-not a promise that the camera supports RTSP, WebRTC publishing, a microphone or
-any particular frame rate.
+This is **not** an Android TV camera driver. Native SIP rooms use the existing
+Asterisk audio bridge: one selected handset supplies the room microphone and
+speaker, and only the accepting caregiver joins its other audio leg. Their
+device receives the configured HA camera directly and publishes their own
+camera to the room TV. The two video paths never join call audio. Camera/TV
+failure does not end healthy SIP audio. Explicit legacy adapter profiles remain supported.
+Browser-audio rooms can select **Home Assistant camera · built-in WebRTC**.
+The initiating browser receives the authenticated HA camera video and forwards
+its real video track to the caregiver, while capturing only the selected/default
+microphone locally. No snapshot polling, raw RTSP credentials or custom adapter
+scripts are needed for this path. The camera must provide browser-decodable video
+through HA's WebRTC provider. An unsupported Generic Camera ffmpeg wrapper can
+fall back to a read-only Simson room camera using the original server-side stream
+source; it never changes the original camera configuration. Camera failure leaves
+audio available and reports the failure; it never silently opens a different webcam.
+If HA's camera WebRTC provider rejects the source, supported browsers can forward
+HA's authenticated HLS live video instead. This uses real decoded frames, not
+snapshot polling, but adds the stream's HLS latency. Microphone audio remains
+on the direct WebRTC call. Browsers without media-element capture need a working
+native camera WebRTC provider. Room routing calls the shared validated call helper
+directly rather than fabricating version-sensitive HA ServiceCall objects.
+
+Choose **Built-in Home Assistant Cast** to show the caregiver's received video on
+the room TV. Saving in Room setup creates a dedicated managed dashboard/view.
+The Cast screen uses a second, video-only WebRTC connection from the accepting
+caregiver in SIP mode, or the room source browser in browser mode: no microphone, audio transceiver, automatic answering or unrelated call
+access. The screen requires HA's authenticated Cast receiver, HTTPS external URL and
+a browser-compatible Cast receiver. The publishing device must remain open and
+the caregiver must enable their camera. HA's configured Cast system identity is
+authorized only for viewer signaling on rooms with a configured Cast display;
+it cannot publish, obtain the room camera binding or join audio. Other HA users
+and unrelated dashboards remain excluded. Cast service success alone is not screen
+readiness: the display reports ready only after decoded video frames.
 
 No SIP credentials, network camera URLs, passwords or TURN secrets belong in
 room profiles, events or dashboard YAML. Keep those in the respective device or
@@ -52,13 +81,21 @@ track are different capabilities.
 No TV auto-answer, anonymous media access, global dashboard navigation or
 third-party audio listening is enabled. The room card does not acquire a
 microphone or attach itself to someone else's call. Native browser media reports
-readiness only after both inbound/outbound audio packets, and video after both
-decoded/encoded frames. Blocked audio playback does not count as ready. Call
-signalling alone does not mark media ready. Display and split-media readiness
-still require the adapter's acknowledgements.
+readiness only after both inbound/outbound audio packets. Browser video requires
+decoded/encoded frames; room-camera publishing requires encoded outgoing frames
+without requiring the caregiver to enable their own camera. Blocked audio playback
+does not count as ready. Signalling alone does not mark media ready. The native
+display acknowledges decoded frames; custom adapters must acknowledge their own
+real readiness.
+
+During rolling deployment, the room workspace checks backend capabilities before
+creating a camera/Cast profile or modifying its dashboard. If the newer Python
+backend has not loaded, it refuses these changes clearly rather than sending
+unsupported fields or pretending the media path is ready. Existing voice/custom
+adapter room editing remains compatible with the previous backend.
 
 Cross-node room destinations, native SIP-source-to-caregiver bridging,
-network-camera publishing and unattended TV media acquisition are **not newly
+unattended TV microphone acquisition are **not newly
 implemented here**. A SIP adapter must implement the appropriate supported
 transport and bind an actual room-owned call; connecting two unrelated calls
 does not meet this contract. Do not label a split room production-ready until
@@ -265,6 +302,52 @@ a secret channel: never put stream credentials or access tokens in it.
 
 ## Acceptance checks before a room goes live
 
+### Panic button and audio selection
+
+The panic helper only starts calls when its room profile has `trigger_enabled`
+saved as true. The button-state listener emits `simson_room_triggered`; one
+integration-owned consumer validates the unchanged enabled binding and starts
+that exact request once. Do not add a second dialing automation for the same event.
+Duplicate or restored events do not redial. Independent caregiver alarms should
+also listen for the panic event and remain separate from call success.
+A Cast receiver is a video-only output, not the
+room microphone, even when the television hardware has a microphone.
+
+**Browser audio only:** on the room's microphone-capable browser, signed in as its configured room user,
+add `custom:simson-room-source-card` with `entity: sensor.your_simson_room`.
+Click **Enable room station** after opening/reloading that page. It preflights
+microphone permission and immediately releases the probe tracks. New matching
+room sessions can then acquire media automatically; old sessions, other users,
+unrelated calls and SIP-audio profiles cannot activate this microphone.
+An authenticated, expiring server lease prevents two room browsers being armed
+at once. Closing/disarming the owning station stops its media and requests
+cleanup only for its exact joined room session. Keep the station page running;
+a suspended/closed browser is not an unattended microphone appliance. An HA
+restart never manufactures media readiness or replays a restored panic press.
+
+For **SIP phone · room microphone and speaker**, choose the handset extension
+(for example 1040), HA camera, optional Cast display and caregiver in Room setup.
+Leave start/cleanup scripts empty for native mode. Select manual pickup or a
+trusted auto-answer request; the phone must support and permit that request.
+No room browser microphone is opened. The caregiver's phone microphone is the
+other end of the conversation, not a replacement room microphone. They must
+enable their own camera for video on the TV. An internal/USB TV microphone is
+an alternative only through a microphone-capable browser/app, never HA Cast.
+
+The native endpoint uses account/node install-token authentication, validates
+same-account phone and node ownership, refuses unregistered/busy phones and
+retains bounded request receipts for 24 hours in the running VPS process.
+Ambiguous HTTP results are reconciled against exact room/session metadata, not
+automatically redialed. Receipts are not durable across VPS restarts; restarting
+the VPS is not a substitute for verifying and ending an uncertain session.
+
+Frontend releases must deploy each JavaScript/manifest file together with its
+matching `.gz` and `.br` representations. The frontend build generates these
+representations and tests compare their decoded bytes. A stale compressed sibling
+can register an older set of cards even when an uncompressed HTTP check succeeds;
+verify a fresh browser load, not only an identity-encoding download. After a
+frontend release, update the Lovelace resource version without restarting HA.
+
 - Caller and caregiver are different users; an unrelated dashboard neither
   hears nor acquires the call. Test alternate phones/mobile data and TURN.
 - One panic activation creates one session; retries do not ring twice.
@@ -277,5 +360,7 @@ a secret channel: never put stream credentials or access tokens in it.
 - HA/addon restarts, offline cameras, stale commands and failed cleanup leave
   actionable state rather than silently reopening private media.
 
-Local tests use dummy calls only. No real outside calls or VPS/gateway changes
-are required for installing this control-plane feature.
+Local tests use dummy calls/media only. Native mode requires the matching addon
+proxy, VPS operation and integration to be loaded together. Real handset pickup,
+two-way audio, camera playback and TV frames still require device acceptance;
+SIP answer and successful Cast launch alone are not proof of media delivery.

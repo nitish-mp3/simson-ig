@@ -10,6 +10,19 @@ OPEN_SESSIONS = {"starting", "ringing", "connecting", "active", "degraded", "end
 COMPONENTS = ("audio", "video", "display")
 
 
+def native_sip_room(profile):
+    return profile.get("audio_mode") == "sip" and profile.get("video_mode") in ("none", "ha_camera") and not profile.get("start_script") and not profile.get("stop_script") and (not profile.get("display_entity") or profile.get("display_mode", "cast") == "cast")
+
+
+def owns_native_room_call(profile, session, actual):
+    metadata = (actual or {}).get("metadata") or {}
+    return bool(native_sip_room(profile) and actual and actual.get("state") in ACTIVE_CALLS and
+        (actual.get("caller_user_id") or metadata.get("caller_user_id")) == profile["room_user_id"] and
+        (actual.get("target_user_id") or metadata.get("target_user_id")) == session.get("target_user_id") and
+        metadata.get("room_session_id") == session.get("session_id") and
+        metadata.get("source_extension") == profile.get("sip_extension") and metadata.get("media_mode") == "sip_room")
+
+
 def session_snapshot(session):
     return deepcopy({key: value for key, value in session.items() if key != "recent_requests"}) if session else None
 
@@ -20,7 +33,7 @@ def room_profile(data):
         raise ValueError("Use a stable lowercase room_id, up to 64 characters")
     profile = {key: str(data.get(key) or "").strip() for key in (
         "label", "room_user_id", "caregiver_user_id", "sip_extension", "camera_entity",
-        "display_entity", "start_script", "stop_script", "trigger_entity")}
+        "display_entity", "start_script", "stop_script", "trigger_entity", "cast_dashboard", "cast_view")}
     profile["label"] = profile["label"][:100] or room_id
     if not profile["room_user_id"] or not profile["caregiver_user_id"]:
         raise ValueError("Select separate room and caregiver Home Assistant users")
@@ -28,8 +41,15 @@ def room_profile(data):
         raise ValueError("Room and caregiver must be different users")
     profile["audio_mode"] = str(data.get("audio_mode", "browser"))
     profile["video_mode"] = str(data.get("video_mode", "none"))
-    if profile["audio_mode"] not in ("browser", "sip") or profile["video_mode"] not in ("none", "browser", "adapter"):
+    if profile["video_mode"] == "adapter" and profile["camera_entity"] and not profile["start_script"] and profile["audio_mode"] == "browser":
+        profile["video_mode"] = "ha_camera"
+    if profile["audio_mode"] not in ("browser", "sip") or profile["video_mode"] not in ("none", "browser", "ha_camera", "adapter"):
         raise ValueError("Choose a supported audio/video mode")
+    profile["display_mode"] = str(data.get("display_mode") or ("adapter" if profile["start_script"] or profile["display_entity"].startswith("remote.") else "cast"))
+    if profile["display_mode"] not in ("cast", "adapter"):
+        raise ValueError("Choose built-in Cast or a custom display adapter")
+    if profile["video_mode"] == "ha_camera" and not profile["camera_entity"]:
+        raise ValueError("Choose the Home Assistant camera to send during room calls")
     for key in ("start_script", "stop_script"):
         if profile[key] and not re.fullmatch(r"script\.[a-z0-9_]+", profile[key]):
             raise ValueError("Adapters must reference Home Assistant script entities")
@@ -38,9 +58,23 @@ def room_profile(data):
             raise ValueError("A SIP audio room needs a valid extension")
         if profile["video_mode"] == "browser":
             raise ValueError("Split SIP audio needs a video-only adapter, not a second browser audio call")
-    if profile["audio_mode"] == "sip" or profile["video_mode"] == "adapter" or profile["display_entity"]:
+        if native_sip_room(profile) and not re.fullmatch(r"[0-9]{1,12}", profile["sip_extension"]):
+            raise ValueError("Native SIP audio requires a numeric registered extension")
+    profile["sip_auto_mode"] = str(data.get("sip_auto_mode", "speaker"))
+    if profile["sip_auto_mode"] not in ("off", "answer", "speaker"):
+        raise ValueError("Choose manual, auto-answer or speaker for SIP audio")
+    if (profile["audio_mode"] == "sip" and not native_sip_room(profile) or profile["video_mode"] == "adapter" or profile["start_script"] or profile["stop_script"]
+            or profile["display_entity"] and profile["display_mode"] == "adapter"):
         if not profile["start_script"] or not profile["stop_script"]:
             raise ValueError("Split-device rooms require both start and cleanup adapter scripts")
+    if profile["display_entity"] and profile["display_mode"] == "cast":
+        if not profile["display_entity"].startswith("media_player."):
+            raise ValueError("Built-in Cast requires a media_player entity")
+        if not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,100}", profile["cast_dashboard"] or "simson-room-screens"):
+            raise ValueError("Choose a dashboard URL path, not a full address")
+        profile["cast_dashboard"] = profile["cast_dashboard"] or "simson-room-screens"
+        if profile["cast_view"] and not re.fullmatch(r"[A-Za-z0-9_-]{1,120}", profile["cast_view"]):
+            raise ValueError("Choose a dashboard view path")
     if profile["camera_entity"] and not re.fullmatch(r"camera\.[a-z0-9_]+", profile["camera_entity"]):
         raise ValueError("camera_entity must be a camera entity, not a stream URL or password")
     if profile["display_entity"] and not re.fullmatch(r"(?:media_player|remote)\.[a-z0-9_]+", profile["display_entity"]):
@@ -65,7 +99,7 @@ def room_profile(data):
 
 
 class RoomSessions:
-    def __init__(self, profiles, sessions, save, emit, start_call, hangup, run_script, now=time.time):
+    def __init__(self, profiles, sessions, save, emit, start_call, hangup, run_script, now=time.time, start_display=None, start_sip_call=None):
         self.profiles = profiles
         self.sessions = sessions
         self.save = save
@@ -73,6 +107,8 @@ class RoomSessions:
         self.start_call = start_call
         self.hangup = hangup
         self.run_script = run_script
+        self.start_display = start_display
+        self.start_sip_call = start_sip_call
         self.now = now
         self.lock = asyncio.Lock()
         self.operations = {}
@@ -129,19 +165,37 @@ class RoomSessions:
             self.sessions[room_id] = session
             await self.changed(room_id)
         try:
-            if profile["audio_mode"] == "browser":
+            if profile["audio_mode"] == "browser" or native_sip_room(profile):
                 session["unconfirmed_call"] = True
                 await self.changed(room_id)
-                result = await self.start_call(profile, target_user_id, context)
+                if native_sip_room(profile):
+                    if not self.start_sip_call:
+                        raise ValueError("The native SIP room backend is unavailable")
+                    result = await self.start_sip_call(profile, {"room_id": room_id, "session_id": session["session_id"], "request_id": request_id}, target_user_id, context)
+                else:
+                    result = await self.start_call(profile, target_user_id, context)
                 if not result.get("call_id"):
                     raise ValueError("The call service did not return a call ID")
                 session["call_id"] = result["call_id"]
+                session["sip_bridge_id"] = result.get("sip_bridge_id", "")
                 session["unconfirmed_call"] = False
                 session["state"] = "ringing"
                 await self.changed(room_id)
             if profile["start_script"]:
                 await self.run_script(profile["start_script"], self.variables(room_id, session), context)
-        except Exception:
+            elif profile["display_entity"] and profile.get("display_mode") == "cast" and self.start_display:
+                try:
+                    await self.start_display(profile, context)
+                except Exception:
+                    session["components"]["display"] = "failed"
+                    session["reason"] = "The TV could not open its room view. Browser audio/video can continue."
+                    self.update_state(session)
+                    await self.changed(room_id)
+        except Exception as error:
+            known_id = (getattr(error, "payload", {}) or {}).get("call_id")
+            if known_id:
+                session["call_id"] = known_id
+                session["unconfirmed_call"] = False
             session["state"] = "attention"
             session["cleanup_requested"] = True
             session["reason"] = "Setup failed or its result is uncertain. End this session before retrying."
@@ -218,7 +272,7 @@ class RoomSessions:
                 await self.run_script(script, self.variables(room_id, session), context)
             except Exception:
                 errors.append("The room cleanup adapter failed")
-            required = {"display"} if self.profiles[room_id]["display_entity"] else set()
+            required = {"display"} if self.profiles[room_id]["display_entity"] and self.profiles[room_id].get("display_mode", "adapter") == "adapter" else set()
             if self.profiles[room_id]["audio_mode"] == "sip":
                 required.add("audio")
             if self.profiles[room_id]["video_mode"] == "adapter":
@@ -243,6 +297,12 @@ class RoomSessions:
             if session["state"] not in OPEN_SESSIONS:
                 continue
             profile = self.profiles[room_id]
+            if session.get("unconfirmed_call") and native_sip_room(profile):
+                matches = [item for item in calls if owns_native_room_call(profile, session, item)]
+                if len(matches) == 1:
+                    session["call_id"] = matches[0]["call_id"]
+                    session["unconfirmed_call"] = False
+                    await self.changed(room_id)
             call = indexed.get(session["call_id"])
             age = self.now() - session["started_at"]
             if session.get("unconfirmed_call") and age > 30:
@@ -280,16 +340,22 @@ class RoomSessions:
                     self.update_state(session)
                     await self.changed(room_id)
                 else:
-                    session["reason"] = "Room setup timed out; cleanup requested"
-                    await self.end(room_id, session["session_id"], None)
+                    if native_sip_room(profile) and session.get("call_active"):
+                        session["state"] = "degraded"
+                        session["reason"] = "SIP call remains active, but two-way audio is not verified. Check handset microphone and caregiver sound permissions; maximum duration still applies."
+                        await self.changed(room_id)
+                    else:
+                        session["reason"] = "Room setup timed out; cleanup requested"
+                        await self.end(room_id, session["session_id"], None)
 
 
 async def setup_rooms(hass, entry):
-    from homeassistant.core import SupportsResponse, ServiceCall
+    from homeassistant.core import SupportsResponse
     from homeassistant.exceptions import HomeAssistantError
     from homeassistant.helpers.storage import Store
-    from .user_calls import start_user_call
+    from .user_calls import start_user_call_data
     from .room_triggers import setup_room_triggers
+    from .room_display import setup_room_display
     import voluptuous as vol
 
     owner = hass.data["simson"][entry.entry_id]
@@ -311,14 +377,28 @@ async def setup_rooms(hass, entry):
 
     async def start(profile, target_id, context):
         node_id = (owner["coordinator"].data or {}).get("node_id", "")
-        call = ServiceCall("simson", "call_user", {"node_id": node_id, "target_user_id": target_id,
-            "caller_user_id": profile["room_user_id"], "call_type": "video" if profile["video_mode"] == "browser" else "voice"})
-        return await start_user_call(hass, call)
+        data = {"node_id": node_id, "target_user_id": target_id,
+            "caller_user_id": profile["room_user_id"], "call_type": "video" if profile["video_mode"] in ("browser", "ha_camera") else "voice"}
+        return await start_user_call_data(hass, data)
 
     async def hangup(call_id):
         calls = await owner["client"].calls()
         if any(call.get("call_id") == call_id and call.get("state") in ACTIVE_CALLS for call in calls.get("calls", [])):
             await owner["client"].hangup_call(call_id, strict_call_id=True)
+
+    async def start_sip(profile, identity, target_id, context):
+        if not (await owner["client"].room_capabilities()).get("native_sip_rooms"):
+            raise ValueError("The addon/VPS native SIP room update is unavailable")
+        caller = await hass.auth.async_get_user(profile["room_user_id"])
+        target = await hass.auth.async_get_user(target_id)
+        if not caller or not target or not caller.is_active or not target.is_active or caller.system_generated or target.system_generated:
+            raise ValueError("Room users must be active Home Assistant users")
+        calls = await owner["client"].calls()
+        for actual in calls.get("calls", []):
+            metadata = actual.get("metadata") or {}
+            if actual.get("state") in ACTIVE_CALLS and {profile["room_user_id"], target_id} & {actual.get(key) or metadata.get(key) for key in ("caller_user_id", "target_user_id", "answered_by_user_id")}:
+                raise ValueError("A room participant already has a call")
+        return await owner["client"].start_room_sip_call(profile, identity, {"node_id": (owner["coordinator"].data or {}).get("node_id", ""), "user_id": target_id, "caller_name": caller.name or profile["label"]})
 
     async def script(entity_id, variables, context):
         async with asyncio.timeout(20):
@@ -326,10 +406,17 @@ async def setup_rooms(hass, entry):
                 {**variables, "node_id": (owner["coordinator"].data or {}).get("node_id", "")},
                 blocking=True, context=context)
 
-    manager = RoomSessions(profiles, sessions, save, emit, start, hangup, script)
+    async def cast_display(profile, context):
+        async with asyncio.timeout(15):
+            await hass.services.async_call("cast", "show_lovelace_view", {
+                "entity_id": profile["display_entity"], "dashboard_path": profile["cast_dashboard"],
+                "view_path": profile["cast_view"]}, blocking=True)
+
+    manager = RoomSessions(profiles, sessions, save, emit, start, hangup, script, start_display=cast_display, start_sip_call=start_sip)
     owner["rooms"] = manager
     owner["room_listeners"] = []
     setup_room_triggers(hass, entry, owner)
+    await setup_room_display(hass, owner)
     for session in sessions.values():
         if session["state"] in OPEN_SESSIONS:
             session["state"] = "attention"
@@ -339,12 +426,20 @@ async def setup_rooms(hass, entry):
         return next((value for value in hass.data["simson"].values() if isinstance(value, dict) and value.get("rooms")
             and (value["coordinator"].data or {}).get("node_id") == data["node_id"]), None)
 
-    async def authorize(call, profile=None, admin=False):
+    async def authorize(call, profile=None, admin=False, selected_owner=None):
         user = await hass.auth.async_get_user(call.context.user_id) if call.context.user_id else None
         if not call.context.user_id and not admin:
             return
         if not user or not user.is_active or user.system_generated:
             raise HomeAssistantError("A signed-in user or trusted automation is required")
+        if call.service == "report_room_component" and profile and native_sip_room(profile) and selected_owner:
+            session = selected_owner["rooms"].current(call.data["room_id"]) or {}
+            if user.id == session.get("target_user_id") and call.data.get("session_id") == session.get("session_id"):
+                calls = await selected_owner["client"].calls()
+                actual = next((item for item in calls.get("calls", []) if item.get("call_id") == session.get("call_id")), None)
+                metadata = (actual or {}).get("metadata") or {}
+                if owns_native_room_call(profile, session, actual) and actual.get("state") == "active" and (actual.get("answered_by_user_id") or metadata.get("answered_by_user_id")) == user.id and call.data.get("component") in ("audio", "video"):
+                    return
         if user.is_admin:
             return
         if admin or not profile or user.id != profile["room_user_id"]:
@@ -374,7 +469,12 @@ async def setup_rooms(hass, entry):
                     else:
                         revision = (profile or {}).get("revision", 0) + 1
                         room_id, profile = room_profile(call.data)
+                        if native_sip_room(profile) and not (await selected_owner["client"].room_capabilities()).get("native_sip_rooms"):
+                            raise ValueError("The addon/VPS native SIP room update must be installed before selecting this mode")
                         profile["revision"] = revision
+                        if profile["display_entity"] and profile["display_mode"] == "cast" and not profile["cast_view"]:
+                            from hashlib import sha256
+                            profile["cast_view"] = "room-" + sha256(f"{call.data['node_id']}:{room_id}".encode()).hexdigest()[:20]
                         for user_id in (profile["room_user_id"], profile["caregiver_user_id"]):
                             user = await hass.auth.async_get_user(user_id)
                             if not user or not user.is_active or user.system_generated:
@@ -385,6 +485,9 @@ async def setup_rooms(hass, entry):
                         trigger = hass.states.get(profile["trigger_entity"]) if profile["trigger_entity"] else None
                         if trigger and any(trigger.attributes.get(key) for key in ("simson_room_button", "simson_call_button")):
                             raise ValueError("Choose the physical panic device, not a Simson call button that would trigger itself")
+                        camera = hass.states.get(profile["camera_entity"]) if profile["camera_entity"] else None
+                        if camera and camera.attributes.get("simson_room_camera"):
+                            raise ValueError("Choose the original camera, not another room's video relay")
                         rooms.profiles[room_id] = profile
                     await rooms.changed(room_id)
                     current_profile = rooms.profiles.get(room_id, {})
@@ -397,7 +500,7 @@ async def setup_rooms(hass, entry):
                 return {"room_id": room_id}
             if not profile:
                 raise ValueError("Configure this room first")
-            await authorize(call, profile)
+            await authorize(call, profile, selected_owner=selected_owner)
             if call.service == "start_room_call":
                 target = call.data.get("target_user_id") or profile["caregiver_user_id"]
                 user = await hass.auth.async_get_user(target)
@@ -426,7 +529,8 @@ async def setup_rooms(hass, entry):
     schemas = {
         "configure_room": {**base, **{vol.Optional(key): str for key in (
             "label", "room_user_id", "caregiver_user_id", "audio_mode", "video_mode", "sip_extension",
-            "camera_entity", "display_entity", "start_script", "stop_script", "trigger_entity", "trigger_mode", "trigger_state")},
+            "camera_entity", "display_entity", "start_script", "stop_script", "trigger_entity", "trigger_mode", "trigger_state",
+            "display_mode", "cast_dashboard", "cast_view", "sip_auto_mode")},
             vol.Optional("trigger_enabled"): bool,
             vol.Optional("trigger_cooldown_sec"): vol.All(vol.Coerce(int), vol.Range(min=1, max=3600)),
             vol.Optional("expected_revision"): vol.All(vol.Coerce(int), vol.Range(min=0)),
@@ -457,7 +561,13 @@ async def setup_rooms(hass, entry):
                 "connected": bool(data.get("vps_connected")), "rooms": [
                     {"room_id": room_id, **deepcopy(profile), "session": session_snapshot(value["rooms"].current(room_id))}
                     for room_id, profile in value["rooms"].profiles.items()]})
-        return {"nodes": nodes, "users": [{"user_id": user.id, "label": user.name or "User"}
+        for node in nodes:
+            selected_owner = selected({"node_id": node["node_id"]})
+            try:
+                node["native_sip_rooms"] = bool((await selected_owner["client"].room_capabilities()).get("native_sip_rooms"))
+            except Exception:
+                node["native_sip_rooms"] = False
+        return {"capabilities": {"ha_camera": True, "cast_display": True, "native_sip_room_profiles": True}, "nodes": nodes, "users": [{"user_id": user.id, "label": user.name or "User"}
             for user in users if user.is_active and not user.system_generated]}
 
     if not hass.services.has_service("simson", "get_room_configuration"):

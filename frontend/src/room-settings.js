@@ -1,9 +1,10 @@
 import {LitElement, html, nothing, css} from 'lit';
+import './room-source-card.js';
 
 const openStates = new Set(['starting','ringing','connecting','active','degraded','ending','attention']);
-const fields = ['label','room_user_id','caregiver_user_id','audio_mode','video_mode','sip_extension','camera_entity',
+const fields = ['label','room_user_id','caregiver_user_id','audio_mode','video_mode','sip_extension','sip_auto_mode','camera_entity',
   'display_entity','start_script','stop_script','trigger_entity','trigger_enabled','trigger_mode','trigger_state',
-  'trigger_cooldown_sec','setup_timeout_sec','max_duration_sec'];
+  'trigger_cooldown_sec','setup_timeout_sec','max_duration_sec','display_mode','cast_dashboard','cast_view'];
 
 export class SimsonRoomSettings extends LitElement {
   static properties = {_data:{state:true},_draft:{state:true},_selectedNode:{state:true},_error:{state:true},
@@ -56,10 +57,11 @@ export class SimsonRoomSettings extends LitElement {
     if(this._draft&&this._dirty()&&!window.confirm('Discard unsaved room changes?'))return;
     this._original=null;this._revision=0;this._manualId=false;this._confirmRemove=false;this._error='';this._notice='';
     this._draft={room_id:'',label:'',room_user_id:'',caregiver_user_id:source?.caregiver_user_id||'',
-      audio_mode:source?.audio_mode||'browser',video_mode:source?.video_mode||'none',sip_extension:'',camera_entity:'',display_entity:'',
+      audio_mode:source?.audio_mode||'browser',video_mode:source?.video_mode||'none',sip_extension:'',sip_auto_mode:source?.sip_auto_mode||'speaker',camera_entity:'',display_entity:'',
       start_script:source?.start_script||'',stop_script:source?.stop_script||'',trigger_entity:'',trigger_enabled:false,
       trigger_mode:'state',trigger_state:'on',trigger_cooldown_sec:source?.trigger_cooldown_sec||30,
       setup_timeout_sec:source?.setup_timeout_sec||60,max_duration_sec:source?.max_duration_sec||3600};
+    Object.assign(this._draft,{display_mode:'cast',cast_dashboard:'simson-room-screens',cast_view:''});
   }
   _edit(room) {
     if(this._draft&&this._dirty()&&!window.confirm('Discard unsaved room changes?'))return;
@@ -67,6 +69,11 @@ export class SimsonRoomSettings extends LitElement {
     this._draft={room_id:room.room_id,...Object.fromEntries(fields.map(key=>[key,room[key]??(
       key==='trigger_enabled'?false:key==='trigger_cooldown_sec'?30:key==='trigger_mode'?'state':key==='trigger_state'?'on':'')]))};
     this._baseline=JSON.stringify(this._draft);this._error='';this._notice='';
+    this._draft.display_mode ||= this._draft.start_script?'adapter':'cast';
+    this._draft.sip_auto_mode ||= 'speaker';
+    this._draft.cast_dashboard ||= 'simson-room-screens';
+    if(this._draft.video_mode==='adapter'&&!this._draft.start_script&&this._draft.camera_entity)this._draft.video_mode='ha_camera';
+    this._baseline=JSON.stringify(this._draft);
   }
   _dirty(){return this._original?JSON.stringify(this._draft)!==this._baseline:Boolean(this._draft?.label||this._draft?.room_id);}
   _entities(domains){return Object.values(this._hass?.states||{}).filter(entity=>domains.includes(entity.entity_id?.split('.')[0]))
@@ -88,8 +95,16 @@ export class SimsonRoomSettings extends LitElement {
     event.preventDefault();if(this._busy)return;
     this._busy=true;this._error='';this._notice='';let saved=false;
     try {
+      const capabilities=this._data.capabilities||{};
+      if(this._draft.video_mode==='ha_camera'&&!capabilities.ha_camera||this._draft.display_entity&&this._draft.display_mode==='cast'&&!capabilities.cast_display)
+        throw Error('The installed backend has not loaded the camera/Cast update yet. No room settings were changed.');
+      if(this._nativeSIP()&&(!capabilities.native_sip_room_profiles||!this._node()?.native_sip_rooms))
+        throw Error('Native SIP room calling is not available on this site yet. Update the integration, addon and VPS together. No room settings were changed.');
+      if(this._draft.display_entity&&this._draft.display_mode==='cast')await this._prepareCastScreen();
+      const supportedFields=fields.filter(key=>(capabilities.cast_display||!['display_mode','cast_dashboard','cast_view'].includes(key))&&
+        (capabilities.native_sip_room_profiles||key!=='sip_auto_mode'));
       await this._rpc('configure_room',{node_id:this._selectedNode,room_id:this._draft.room_id,
-        ...Object.fromEntries(fields.map(key=>[key,this._draft[key]])),expected_revision:this._revision});
+        ...Object.fromEntries(supportedFields.map(key=>[key,this._draft[key]])),expected_revision:this._revision});
       saved=true;const id=this._draft.room_id;
       if(!await this._load())throw Error('Configuration refresh failed.');
       const room=this._node()?.rooms.find(room=>room.room_id===id);
@@ -107,17 +122,58 @@ export class SimsonRoomSettings extends LitElement {
   async _control(room){
     this._busy=true;this._error='';
     try{const active=openStates.has(room.session?.state);
-      await this._hass.callService('simson',active?'end_room_call':'start_room_call',{
+      const result=await this._rpc(active?'end_room_call':'start_room_call',{
         node_id:this._selectedNode,room_id:room.room_id,...(active?{session_id:room.session.session_id}:{})});
+      if(!active&&room.audio_mode==='browser'&&result.call_id&&room.room_user_id===this._hass.user?.id)this.dispatchEvent(new CustomEvent('simson-room-browser-start',{
+        bubbles:true,composed:true,detail:{call_id:result.call_id,node_id:this._selectedNode,caller_user_id:room.room_user_id,
+          target_user_id:room.caregiver_user_id,target_user_name:this._data.users.find(user=>user.user_id===room.caregiver_user_id)?.label||'Caregiver',
+          call_type:['browser','ha_camera'].includes(room.video_mode)?'video':'voice'}}));
       await this._load();
     }catch(error){this._error=error?.message||'Room action failed. Check its session status before retrying.';}finally{this._busy=false;}
   }
+  async joinSource(shell, detail){
+    if(detail.caller_user_id!==this._hass.user?.id)return;
+    shell.setConfig({node_id:detail.node_id,title:'Room calling'});
+    const deadline=Date.now()+5000;
+    while(!shell._card?.session&&Date.now()<deadline)await new Promise(resolve=>setTimeout(resolve,50));
+    const session=shell._card?.session;
+    if(!session)return;
+    session._onHAUserCallStarted({...detail,interactive:true});
+    await session._joinUserCall();
+  }
+  async _prepareCastScreen(){
+    const dashboard=this._draft.cast_dashboard||'simson-room-screens';
+    if(dashboard!=='simson-room-screens')return;
+    const digest=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(this._selectedNode+':'+this._draft.room_id));
+    const viewPath='room-'+Array.from(new Uint8Array(digest),value=>value.toString(16).padStart(2,'0')).join('').slice(0,20);
+    const dashboards=await this._hass.callWS({type:'lovelace/dashboards/list'});
+    if(!dashboards.some(item=>item.url_path===dashboard))await this._hass.callWS({type:'lovelace/dashboards/create',
+      url_path:dashboard,title:'Simson room screens',icon:'mdi:television',show_in_sidebar:false,require_admin:false});
+    let config;
+    try{config=await this._hass.callWS({type:'lovelace/config',url_path:dashboard});}
+    catch(error){if(error?.code!=='config_not_found')throw error;config={views:[]};}
+    if(!Array.isArray(config.views))throw Error('The room screen dashboard has a custom strategy; select a different dashboard path.');
+    const index=config.views.findIndex(view=>view.path===viewPath);
+    const card={type:'custom:simson-room-display-card',node_id:this._selectedNode,room_id:this._draft.room_id,title:this._draft.label};
+    const view={title:this._draft.label,path:viewPath,type:'panel',cards:[card]};
+    if(index>=0){
+      const previous=config.views[index];
+      if(previous.cards?.length!==1||!['custom:simson-room-display-card','custom:simson-cast-room-screen'].includes(previous.cards[0].type)||previous.cards[0].room_id!==this._draft.room_id)
+        throw Error('This screen view was customized. Choose its path explicitly rather than overwriting it.');
+      card.type=previous.cards[0].type;
+      config.views[index]={...previous,...view};
+    }else config.views.push(view);
+    await this._hass.callWS({type:'lovelace/config/save',url_path:dashboard,config});
+    this._draft.cast_view=viewPath;
+  }
+  _nativeSIP(){return this._draft?.audio_mode==='sip'&&['none','ha_camera'].includes(this._draft.video_mode)&&
+    !this._draft.start_script&&!this._draft.stop_script&&(!this._draft.display_entity||this._draft.display_mode==='cast');}
   render(){
     if(!this._hass?.user?.is_admin)return html`<p role="alert">Room configuration is available to administrators only.</p>`;
     const node=this._node();const rooms=(node?.rooms||[]).filter(room=>(room.label+' '+room.room_id).toLowerCase().includes(this._query.toLowerCase()));
     const page=Math.min(this._page,Math.max(0,Math.ceil(rooms.length/8)-1));
     const editing=node?.rooms.find(room=>room.room_id===this._original);const active=openStates.has(editing?.session?.state);
-    const split=this._draft&&(this._draft.audio_mode==='sip'||this._draft.video_mode==='adapter'||this._draft.display_entity);
+    const split=this._draft&&!this._nativeSIP()&&(this._draft.audio_mode==='sip'||this._draft.video_mode==='adapter'||this._draft.display_entity&&this._draft.display_mode==='adapter');
     return html`<header><div><h1>Room workspace</h1><p class="hint">Connect room hardware once. Reuse the same controls and automations across your site.</p></div>
       <div class="toolbar"><button class="secondary" ?disabled=${this._busy} @click=${()=>this._load()}>Refresh devices</button>
       <button ?disabled=${this._busy||!node} @click=${()=>this._new()}>Add room</button></div></header>
@@ -141,22 +197,33 @@ export class SimsonRoomSettings extends LitElement {
           ${this._userField('room_user_id','Room / TV login')}${this._userField('caregiver_user_id','Default caregiver')}
         </div></fieldset>
         <fieldset ?disabled=${this._busy||active}><legend>Audio, camera and screen</legend><div class="grid">
-          <label>Audio device<select name="audio_mode" .value=${this._draft.audio_mode} @change=${event=>{this._set('audio_mode',event.target.value);if(event.target.value==='sip'&&this._draft.video_mode==='browser')this._set('video_mode','adapter');}}>
-            <option value="browser" ?selected=${this._draft.audio_mode==='browser'}>This room's browser / TV microphone</option><option value="sip" ?selected=${this._draft.audio_mode==='sip'}>Separate SIP phone</option></select></label>
+          <label>Audio device<select name="audio_mode" .value=${this._draft.audio_mode} @change=${event=>{this._set('audio_mode',event.target.value);if(event.target.value==='sip'&&this._draft.video_mode==='browser')this._set('video_mode','none');}}>
+            <option value="browser" ?selected=${this._draft.audio_mode==='browser'}>TV / browser microphone · microphone-capable app, not Cast</option><option value="sip" ?selected=${this._draft.audio_mode==='sip'}>SIP phone · room microphone and speaker</option></select></label>
           <label>Video source<select name="video_mode" .value=${this._draft.video_mode} @change=${event=>this._set('video_mode',event.target.value)}>
-            <option value="none" ?selected=${this._draft.video_mode==='none'}>Voice only</option><option value="browser" ?selected=${this._draft.video_mode==='browser'} ?disabled=${this._draft.audio_mode==='sip'}>Browser / USB camera</option><option value="adapter" ?selected=${this._draft.video_mode==='adapter'}>Network camera / media integration</option></select></label>
-          ${this._draft.audio_mode==='sip'?html`<label>SIP extension<input name="sip_extension" required pattern="[A-Za-z0-9_-]{1,64}" .value=${this._draft.sip_extension}
-            @input=${event=>this._set('sip_extension',event.target.value)} placeholder="Registered handset extension"></label>`:nothing}
-          ${this._draft.video_mode==='adapter'?this._entityField('camera_entity','Room camera',['camera'],'Choose the camera exposed by your camera/media integration.'):nothing}
+            <option value="none" ?selected=${this._draft.video_mode==='none'}>Voice only</option><option value="browser" ?selected=${this._draft.video_mode==='browser'} ?disabled=${this._draft.audio_mode==='sip'}>Browser / USB camera</option><option value="ha_camera" ?selected=${this._draft.video_mode==='ha_camera'}>Home Assistant camera · independent room video</option><option value="adapter" ?selected=${this._draft.video_mode==='adapter'}>Custom media adapter</option></select></label>
+          ${this._draft.audio_mode==='sip'?html`<label>SIP extension<input name="sip_extension" required pattern=${this._nativeSIP()?'[0-9]{1,12}':'[A-Za-z0-9_-]{1,64}'} .value=${this._draft.sip_extension}
+            @input=${event=>this._set('sip_extension',event.target.value)} placeholder="Registered handset extension"></label>
+            ${this._data.capabilities?.native_sip_room_profiles?html`<label>Room phone pickup<select name="sip_auto_mode" .value=${this._draft.sip_auto_mode} @change=${event=>this._set('sip_auto_mode',event.target.value)}>
+              <option value="off" ?selected=${this._draft.sip_auto_mode==='off'}>Ring phone · manual pickup</option>
+              <option value="answer" ?selected=${this._draft.sip_auto_mode==='answer'}>Request auto-answer</option>
+              <option value="speaker" ?selected=${this._draft.sip_auto_mode==='speaker'}>Request auto-answer on speaker</option>
+            </select><span class="hint">The handset must support and allow trusted auto-answer requests.</span></label>`:nothing}`:nothing}
+          ${['adapter','ha_camera'].includes(this._draft.video_mode)?this._entityField('camera_entity','Room camera',['camera'],'The selected HA WebRTC video is sent to the caregiver; no RTSP URL or password in this form.'):nothing}
           ${this._entityField('display_entity','Room display (optional)',['media_player','remote'],'Select the TV or player that should show the call.')}
-        </div><p class="hint">Only one audio path is used. Merely showing a camera does not publish it to the caregiver.</p></fieldset>
+          ${this._draft.display_entity?html`<label>Display integration<select name="display_mode" .value=${this._draft.display_mode} @change=${event=>this._set('display_mode',event.target.value)}><option value="cast" ?selected=${this._draft.display_mode==='cast'}>Built-in Home Assistant Cast</option><option value="adapter" ?selected=${this._draft.display_mode==='adapter'}>Custom display adapter</option></select></label>
+          ${this._draft.display_mode==='cast'?html`<label>Cast dashboard URL path<input name="cast_dashboard" .value=${this._draft.cast_dashboard} @input=${event=>this._set('cast_dashboard',event.target.value)}><span class="hint">The default creates a dedicated video-only room screen automatically.</span></label><label>Cast view path<input name="cast_view" .value=${this._draft.cast_view} @input=${event=>this._set('cast_view',event.target.value)} placeholder="Generated automatically for the managed dashboard"></label>`:nothing}`:nothing}
+        </div><p class="hint">SIP mode uses the room phone for two-way audio; no room computer is needed. The caregiver receives the room camera and can share their own camera to the TV. Cast is a video-only display; TV/USB microphones need an app or browser that supports microphone capture.</p>
+          ${this._nativeSIP()&&!node?.native_sip_rooms?html`<p class="warning">This site's native SIP room backend is not available yet. Existing settings remain unchanged until all components support it.</p>`:nothing}</fieldset>
         <fieldset ?disabled=${this._busy||active}><legend>Panic button / automatic trigger</legend><div class="grid">
           ${this._entityField('trigger_entity','Trigger device',['binary_sensor','input_boolean','input_button','button','event'])}
           <label>When to call<select name="trigger_mode" .value=${this._draft.trigger_mode} @change=${event=>this._set('trigger_mode',event.target.value)}><option value="state" ?selected=${this._draft.trigger_mode==='state'}>Changes to a specific state</option><option value="press" ?selected=${this._draft.trigger_mode==='press'}>Button press / new event</option></select></label>
           ${this._draft.trigger_mode==='state'?html`<label>Trigger state<input name="trigger_state" .value=${this._draft.trigger_state} @input=${event=>this._set('trigger_state',event.target.value)} placeholder="on"></label>`:nothing}
           <label>Cooldown (seconds)<input name="trigger_cooldown_sec" type="number" min="1" max="3600" .value=${String(this._draft.trigger_cooldown_sec)} @input=${event=>this._set('trigger_cooldown_sec',Number(event.target.value))}></label>
           <label class="check full"><input name="trigger_enabled" type="checkbox" .checked=${this._draft.trigger_enabled} @change=${event=>this._set('trigger_enabled',event.target.checked)}>Enable this room's automatic calling trigger</label>
-        </div><p class="hint">Disabled by default. Saving never places a call. Offline/restart restoration and attribute-only updates do not trigger calls. Keep emergency alerts independent of call/media availability.</p></fieldset>
+        </div><p class="hint">${this._draft.trigger_enabled?'Enabled after saving: the selected button will call the caregiver.':'Disabled: pressing the selected button will NOT place a room call. Enable this checkbox and save.'} Saving never places a call. Offline/restart restoration and attribute-only updates do not trigger calls. Keep emergency alerts independent of call/media availability.</p>
+          ${editing&&this._draft.audio_mode==='browser'?html`<p class="hint">Use the control below on the room’s microphone device, signed in as its room user. Leave this page open. You can also add a Room source card to that device’s usual dashboard.</p><simson-room-source-runtime
+            .entity=${Object.values(this._hass.states||{}).find(entity=>entity.attributes?.simson_room&&entity.attributes.node_id===node.node_id&&entity.attributes.room_id===editing.room_id)?.entity_id||''}
+            .hass=${this._hass}></simson-room-source-runtime>`:nothing}</fieldset>
         <details ?open=${Boolean(split)}><summary>Media adapters and safety limits</summary><fieldset ?disabled=${this._busy||active}><div class="grid">
           ${this._entityField('start_script','Reusable start adapter',['script'],'One generic adapter can serve many rooms using the saved bindings.')}
           ${this._entityField('stop_script','Reusable cleanup adapter',['script'],'Must stop only this session and acknowledge stopped components.')}

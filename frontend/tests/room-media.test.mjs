@@ -41,6 +41,12 @@ test('a negotiated video track without decoded frames is not video ready',async(
   assert.deepEqual(calls.map(call=>call[2].component),['audio']);
 });
 
+test('room camera publishing does not require the caregiver to enable their own camera',async()=>{
+  const {host,room,stats,calls}=fixture();room.video_mode='ha_camera';stats.delete('in-v');
+  await reportRoomMedia(host,stats);
+  assert.deepEqual(calls.map(call=>call[2].component),['audio','video']);
+});
+
 test('blocked playback or one-way RTP is not audio ready',async()=>{
   for (const alter of [(host,stats)=>{host._playbackBlocked=true;},
     (host,stats)=>{stats.get('out-a').packetsSent=0;}]) {

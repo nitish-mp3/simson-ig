@@ -9,6 +9,7 @@ import { doorView } from './views/door.js';
 import { userView } from './views/user.js';
 import styles from './styles/card.css';
 import { VERSION } from './version.js';
+import './room-display-card.js';
 
 export class SimsonCard extends LitElement {
   static styles = unsafeCSS(styles);

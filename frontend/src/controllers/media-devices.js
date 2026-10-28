@@ -1,4 +1,6 @@
 const MEDIA_PREFS_KEY = 'simson.card.media.v1';
+import {openCameraSource} from '../transport/ha-camera-source.js';
+
 export const withMediaDevices = Base => class extends Base {
 _loadMediaPreferences() {
     try {
@@ -34,16 +36,24 @@ _mediaConstraints(includeVideo = this._videoEnabled) {
   }
 
 async _enableCamera() {
+    if(this._sipRoomMedia)return this._sipRoomMedia.enableCamera();
     const peer = this._pc;
     if (!peer || this._localStream?.getVideoTracks().length || this._enablingCamera) return;
     this._enablingCamera = true;
     let stream;
     try {
+      if(this._roomMediaContext?.camera_entity){
+        this._cameraSourceAbort?.abort();this._cameraSourceAbort=new AbortController();
+        const source=await openCameraSource(this._hass,this._roomMediaContext.camera_entity,this._cameraSourceAbort.signal,this._webrtcConfig?.ice_servers||[],this._roomMediaContext.camera_fallback_entity);
+        if(this._pc!==peer||!this.isConnected){source.close();return;}
+        this._roomCameraSource=source;stream=source.stream;
+      }else{
       try {
         stream = await navigator.mediaDevices.getUserMedia({audio:false,video:this._mediaConstraints(true).video});
       } catch (error) {
         if (!['NotFoundError','OverconstrainedError'].includes(error.name)) throw error;
         stream = await navigator.mediaDevices.getUserMedia({audio:false,video:true});
+      }
       }
       if (this._pc !== peer || !this.isConnected) { stream.getTracks().forEach(track=>track.stop()); return; }
       this._localStream ||= new MediaStream();
@@ -100,6 +110,19 @@ async _enableCamera() {
   }
 
   async _captureMedia(includeVideo) {
+    if(includeVideo&&this._roomMediaContext?.camera_entity){
+      const generation=this._rtcGeneration;
+      const stream=await this._captureMedia(false);
+      if(generation!==this._rtcGeneration){stream.getTracks().forEach(track=>track.stop());throw new DOMException('Call ended','AbortError');}
+      try{
+        this._cameraSourceAbort?.abort();this._cameraSourceAbort=new AbortController();
+        const source=await openCameraSource(this._hass,this._roomMediaContext.camera_entity,this._cameraSourceAbort.signal,this._webrtcConfig?.ice_servers||[],this._roomMediaContext.camera_fallback_entity);
+        if(generation!==this._rtcGeneration){source.close();stream.getTracks().forEach(track=>track.stop());throw new DOMException('Call ended','AbortError');}
+        this._roomCameraSource=source;
+        source.stream.getVideoTracks().forEach(track=>stream.addTrack(track));
+      }catch(error){this._mediaDeviceError=error?.name==='AbortError'?'':error.message||'Room camera unavailable. Audio continues.';}
+      return stream;
+    }
     if (!navigator.mediaDevices?.getUserMedia) throw new Error('Use HTTPS and allow browser microphone access.');
     this._mediaDeviceError = '';
     try {

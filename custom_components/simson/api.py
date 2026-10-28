@@ -301,6 +301,18 @@ class SimsonApiClient:
     async def targets(self) -> dict:
         return await self._get("/api/targets")
 
+    async def room_capabilities(self) -> dict:
+        try:
+            return await self._get("/api/room-calls/capabilities", timeout=aiohttp.ClientTimeout(total=5, connect=1.5))
+        except (aiohttp.ClientError, TimeoutError):
+            return {}
+
+    async def start_room_sip_call(self, profile, identity, target) -> dict:
+        return await self._post("/api/room-calls", {**identity, "source_extension": profile["sip_extension"],
+            "target_node_id": target["node_id"], "target_user_id": target["user_id"], "caller_user_id": profile["room_user_id"],
+            "caller_user_name": target["caller_name"], "source_auto_mode": profile.get("sip_auto_mode", "speaker"),
+            "timeout_sec": min(120, profile["setup_timeout_sec"])})
+
     async def run_trigger(self, trigger_id: str) -> dict:
         return await self._post(f"/api/automation/trigger/{quote(trigger_id, safe='')}")
 

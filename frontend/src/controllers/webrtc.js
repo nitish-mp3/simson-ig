@@ -1,6 +1,7 @@
 import { ICE_SERVERS } from '../transport/ice.js';
 import { authenticatedGet } from '../transport/ha-api.js';
 import { reportRoomMedia } from '../transport/room-media.js';
+import {roomMediaContext,RoomDisplayPublisher} from '../transport/room-display-relay.js';
 export const withWebRTC = Base => class extends Base {
 async _fetchWebRTCConfig() {
     const callId = this._currentCallId || '';
@@ -35,6 +36,7 @@ async _fetchWebRTCConfig() {
       return { ice_servers: ICE_SERVERS, sip: { enabled: false } };
     })();
     try {
+
       const config = await this._webrtcConfigPromise;
       this._turnAvailable = this._webrtcConfigError ? undefined : this._hasTurnRelay(config);
       if (this.isConnected) this._render();
@@ -59,6 +61,13 @@ async _startWebRTC() {
     this._stopMediaPreview(false);
     const generation = this._rtcGeneration = (this._rtcGeneration || 0) + 1;
     try {
+
+    try{this._roomMediaContext=await roomMediaContext(this);}catch{
+      const room=Object.values(this._hass?.states||{}).find(entity=>entity.attributes?.simson_room&&entity.attributes.call_id===this._currentCallId&&entity.attributes.room_user_id===this._hass?.user?.id);
+      if(room?.attributes.video_mode==='ha_camera')throw Error('Room camera configuration could not be authorized. Reconnect Home Assistant before retrying.');
+      this._roomMediaContext=null;
+    }
+    if(generation!==this._rtcGeneration||!this.isConnected)return;
 
     const mediaPromise = (async () => {
       if (!navigator.mediaDevices?.getUserMedia) {
@@ -212,7 +221,7 @@ async _handleWebRTCSignal(event) {
       this._pendingCandidates = [];
 
     } else if (signal_type === "answer") {
-      if (this._pc && this._pc.signalingState === "have-local-offer") {
+      if (this._pc && this._pc.signalingState === "have-local-offer" && !this._isSettingRemoteAnswerPending) {
         this._isSettingRemoteAnswerPending = true;
         try { await this._pc.setRemoteDescription(new RTCSessionDescription(data)); }
         finally { this._isSettingRemoteAnswerPending = false; }
@@ -241,6 +250,8 @@ _sendWebRTCSignal(signalType, data) {
   }
 
 _cleanupWebRTC({endCall=false}={}) {
+    this._cameraSourceAbort?.abort();this._roomCameraSource?.close();this._roomCameraSource=null;
+    this._roomDisplayPublisher?.close();this._roomDisplayPublisher=null;this._roomMediaContext=null;
     this._rtcGeneration = (this._rtcGeneration || 0) + 1;
     this._startingWebRTC = false;
     if (this._statsInterval) { clearInterval(this._statsInterval); this._statsInterval = null; }
@@ -281,12 +292,13 @@ _attachRemoteMedia(stream, track = null) {
     }
     if (!stream) return;
     for(const mediaTrack of stream.getVideoTracks?.() || [])mediaTrack.addEventListener('unmute',()=>this._render(),{once:true});
-    this._remoteStream = stream;
+    if(!this._sipRoomMedia?.source)this._remoteStream = stream;
     this._remoteAudio.autoplay = true;
     this._remoteAudio.muted = false;
     this._remoteAudio.volume = 1;
-    this._remoteAudio.srcObject = stream;
     const audioTracks = stream.getAudioTracks ? stream.getAudioTracks() : [];
+    if(!audioTracks.length){this._attachMediaElements();this._render();return;}
+    this._remoteAudio.srcObject = stream;
     console.log("[Simson] remote audio attached", {
       tracks: audioTracks.length,
       states: audioTracks.map(t => t.readyState),
@@ -313,6 +325,9 @@ async _updateQuality() {
       const stats = await peer.getStats();
       if (this._pc !== peer || this._currentCallId !== callId) return;
       await reportRoomMedia(this, stats);
+      if(this._roomMediaContext?.display_entity&&this._roomMediaContext.display_mode==='cast'&&this._remoteStream?.getVideoTracks().some(track=>track.readyState==='live')&&!this._roomDisplayPublisher){
+        this._roomDisplayPublisher=new RoomDisplayPublisher(this._hass,this._roomMediaContext,this._remoteStream,this._webrtcConfig?.ice_servers||[]);
+      }
       let jitter = 0, packetsLost = 0, packetsReceived = 0;
       stats.forEach(report => {
         if (report.type === "inbound-rtp" && report.kind === "audio") {

@@ -22,10 +22,21 @@ def manager():
         AsyncMock(return_value={"call_id": "call-one"}), AsyncMock(), AsyncMock(), now=lambda: 100)
 
 
+@pytest.mark.asyncio
+async def test_active_native_sip_is_not_hung_up_when_browser_telemetry_is_missing(manager):
+    manager.profiles['room-101']=profile(audio_mode='sip',sip_extension='1040',setup_timeout_sec=90)
+    manager.start_sip_call=AsyncMock(return_value={'call_id':'sip-one'})
+    await manager.start('room-101','press','caregiver',None)
+    manager.now=lambda:195
+    await manager.reconcile([{'call_id':'sip-one','state':'active'}])
+    manager.hangup.assert_not_awaited()
+    assert manager.current('room-101')['state']=='degraded'
+
+
 @pytest.mark.parametrize("extra", [
     {"room_id": "../room"}, {"caregiver_user_id": "room-user"}, {"audio_mode": "unknown"},
-    {"audio_mode": "sip", "sip_extension": "1024"}, {"camera_entity": "rtsp://user:secret@camera"},
-    {"display_entity": "media_player.tv"}, {"start_script": "shell_command.exec"},
+    {"audio_mode": "sip", "sip_extension": "1024/evil"}, {"camera_entity": "rtsp://user:secret@camera"},
+    {"display_entity": "media_player.tv", "display_mode": "adapter"}, {"start_script": "shell_command.exec"},
     {"setup_timeout_sec": 2}, {"max_duration_sec": 999999},
     {"audio_mode": "sip", "sip_extension": "1024", "video_mode": "browser",
         "start_script": "script.start", "stop_script": "script.stop"},
@@ -41,6 +52,26 @@ def test_split_profile_is_explicit_and_contains_no_stream_credentials():
         start_script="script.start", stop_script="script.stop")
     assert actual["audio_mode"] == "sip"
     assert "password" not in actual
+
+
+def test_native_camera_and_cast_do_not_require_custom_scripts():
+    actual = profile(video_mode="ha_camera", camera_entity="camera.room", display_entity="media_player.room")
+    assert actual["display_mode"] == "cast"
+    assert not actual["start_script"]
+    assert profile(video_mode="adapter", camera_entity="camera.room")["video_mode"] == "ha_camera"
+
+
+@pytest.mark.asyncio
+async def test_native_sip_room_uses_exact_session_and_keeps_browser_start_off(manager):
+    manager.profiles['room-101']=profile(audio_mode='sip',sip_extension='1040',video_mode='ha_camera',camera_entity='camera.room')
+    manager.start_sip_call=AsyncMock(return_value={'call_id':'sip-one','sip_bridge_id':'bridge-one'})
+    result=await manager.start('room-101','press-one','caregiver',None)
+    manager.start_call.assert_not_awaited()
+    args=manager.start_sip_call.call_args.args
+    assert args[1]['session_id']==result['session_id'] and args[1]['request_id']=='press-one'
+    assert result['call_id']=='sip-one' and result['state']=='ringing'
+    await manager.end('room-101',result['session_id'],None)
+    manager.hangup.assert_awaited_once_with('sip-one')
 
 
 @pytest.mark.asyncio

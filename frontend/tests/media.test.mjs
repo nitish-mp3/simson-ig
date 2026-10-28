@@ -12,6 +12,24 @@ class Base {
   _render() {}
 }
 
+test('duplicate concurrent answers apply the remote description only once',async()=>{
+  const previous=globalThis.RTCSessionDescription;
+  globalThis.RTCSessionDescription=class {constructor(data){Object.assign(this,data);}};
+  try {
+    const host=new (withWebRTC(Base))();
+    host._currentCallId='owned-call';host._initiatedHere=true;host._pendingCandidates=[];
+    let release,applied=0;
+    const gate=new Promise(resolve=>{release=resolve;});
+    host._pc={signalingState:'have-local-offer',setRemoteDescription:async()=>{applied++;await gate;host._pc.signalingState='stable';}};
+    const answer={call_id:'owned-call',signal_type:'answer',data:{type:'answer',sdp:'answer'}};
+    const first=host._handleWebRTCSignal(answer);
+    await host._handleWebRTCSignal(answer);
+    release();await first;
+    assert.equal(applied,1);
+    assert.equal(host._isSettingRemoteAnswerPending,false);
+  } finally {globalThis.RTCSessionDescription=previous;}
+});
+
 test('a disabled active-call configuration is fetched again instead of cached for a minute',async()=>{
   const host=new (withWebRTC(Base))();
   host._currentCallId='live-call';

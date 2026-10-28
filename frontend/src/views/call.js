@@ -12,7 +12,7 @@ export function callView(host, view) {
   const statusText = view.isActive ? (mediaFailed ? 'Media connection failed' : mediaConnected ? 'Connected' : 'Connecting media…') : view.isIncoming ? (incomingVideo ? 'Incoming video call' : 'Would like to talk to you') : view.callId ? 'Ringing · Waiting for an answer…' : 'Sending your call request to the node…';
   const act = (key, action) => () => host._runAction(key, action);
   const extension = String(host._activeCallAttr('target_extension') || host._activeCallAttr('remote_node_id') || host._currentRemoteNode || '').replace(/^sip:/,'');
-  const linkedVideo = isSipCall && (host._videoProfiles || []).some(profile=>profile.extension===extension);
+  const linkedVideo = isSipCall && !host._sipRoomMedia && (host._videoProfiles || []).some(profile=>profile.extension===extension);
   const localIntent = host._initiatedHere || host._answeredByMe || host._answerPendingCallId===view.callId;
   return html`<section class="call-workspace">
     <span class="eyebrow">${view.isActive ? 'LIVE CONVERSATION' : view.isIncoming ? 'INCOMING CALL' : view.callId ? 'CALLING' : 'STARTING YOUR CALL'}</span>
@@ -21,6 +21,7 @@ export function callView(host, view) {
     ${!view.isActive && !view.isIncoming ? html`<div class="call-setup-status" role="status"><span class="call-setup-spinner"></span><span><b>${view.callId ? 'The destination is being called' : 'Connecting to your call service'}</b><small>${view.callId ? 'You can stay here while the other phone rings.' : 'This card will update as soon as the node responds.'}</small></span></div>` : nothing}
     ${host._micAllowed === false ? html`<div class="notice error">Microphone unavailable. Allow microphone access in your browser to speak.</div>` : nothing}
     ${host._mediaDeviceError ? html`<div class="notice error" role="status">${host._mediaDeviceError}</div>` : nothing}
+    ${host._roomVideoError ? html`<div class="notice error" role="status">${host._roomVideoError}<button @click=${act('retry-room-video',()=>host._sipRoomMedia?host._sipRoomMedia.resume():host._sipUA&&host._startSIPRoomMedia(host._sipUA,host._webrtcConfig?.ice_servers||[]))}>Retry room video</button></div>` : nothing}
     ${view.isActive && host._playbackBlocked ? html`<button class="primary" @click=${act('enable-sound',async()=>{await host._remoteAudio.play();host._playbackBlocked=false;host._render();})}>Enable call sound</button>` : nothing}
     ${view.isActive && mediaFailed && (host._initiatedHere || host._answeredByMe) ? html`<button class="primary" @click=${act('retry-media',()=>{host._webrtcConfig=null;host._webrtcConfigNextRetryAt=0;return isSipCall?host._startSIPCall(host._sipBridgeId || view.activeSipBridgeId):host._startWebRTC();})}>Retry media connection</button>` : nothing}
     ${host._isCaller && !host._initiatedHere && !isSipCall ? html`<div class="browser-join"><p>This call was started by a script or another dashboard. Choose this browser to use its microphone and camera.</p><button class="primary" @click=${act('join-browser',()=>host._joinUserCall())}>Use this browser for audio${host._currentCallType === 'video' ? ' & video' : ''}</button></div>` : nothing}
@@ -28,7 +29,7 @@ export function callView(host, view) {
       ${view.isIncoming ? html`<button class="primary" ?disabled=${Boolean(host._actionPending)} @click=${act('answer', () => host._answer())}>Answer</button><button class="danger" ?disabled=${Boolean(host._actionPending)} @click=${act('reject', () => host._reject())}>Decline</button>` : html`
         <button aria-pressed=${host._muted} ?disabled=${!view.isActive} @click=${act('mute', () => host._toggleMute())}>${host._muted ? 'Unmute' : 'Mute'}</button>
         ${localVideo ? html`<button aria-pressed=${host._cameraMuted} @click=${act('camera', () => host._toggleCamera())}>${host._cameraMuted ? 'Camera on' : 'Camera off'}</button>` : nothing}
-        ${view.isActive && !isSipCall && !localVideo && host._pc ? html`<button @click=${act('enable-camera',()=>host._enableCamera())}>Enable camera</button>` : nothing}
+        ${view.isActive && !localVideo && (host._sipRoomMedia || !isSipCall && host._pc) ? html`<button @click=${act('enable-camera',()=>host._enableCamera())}>Enable camera</button>` : nothing}
         <button class="danger" ?disabled=${!view.callId || Boolean(host._actionPending)} @click=${act('hangup', () => host._hangup())}>${view.callId ? 'End call' : 'Starting…'}</button>
       `}
     </div>

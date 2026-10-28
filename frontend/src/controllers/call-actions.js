@@ -270,6 +270,7 @@ _toggleMute() {
 _toggleCamera() {
     this._cameraMuted = !this._cameraMuted;
     this._localStream?.getVideoTracks().forEach(track => { track.enabled = !this._cameraMuted; });
+    this._sipRoomMedia?.cameraChanged();
     this._render();
   }
 

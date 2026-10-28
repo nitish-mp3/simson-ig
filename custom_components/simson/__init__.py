@@ -88,7 +88,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         await setup_rooms(hass, entry)
 
         await hass.config_entries.async_forward_entry_setups(
-            entry, [Platform.SENSOR, Platform.BUTTON]
+            entry, [Platform.SENSOR, Platform.BUTTON, Platform.CAMERA]
         )
 
         # Register services and live event sync.
@@ -114,7 +114,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a Simson config entry."""
     unload_ok = await hass.config_entries.async_unload_platforms(
-        entry, [Platform.SENSOR, Platform.BUTTON]
+        entry, [Platform.SENSOR, Platform.BUTTON, Platform.CAMERA]
     )
     if unload_ok:
         data = hass.data[DOMAIN].pop(entry.entry_id, None)
@@ -139,7 +139,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                         SERVICE_GET_CALL_HISTORY, SERVICE_RUN_TRIGGER,
                         SERVICE_TRANSFER_CALL, SERVICE_CONNECT_SIP_PHONES, "clear_stuck_calls", "call_user", "set_user_notification_target", "test_user_notification", "configure_videophone"):
                 hass.services.async_remove(DOMAIN, svc)
-            for svc in ("configure_room", "start_room_call", "end_room_call", "bind_room_call", "report_room_component", "get_room_configuration"):
+            for svc in ("configure_room", "start_room_call", "end_room_call", "bind_room_call", "report_room_component", "get_room_configuration", "get_room_media", "room_display_signal", "room_source_lease"):
                 hass.services.async_remove(DOMAIN, svc)
     return unload_ok
 

@@ -71,6 +71,14 @@ export class CallSession extends CardController {
 
   connectedCallback() {
     super.connectedCallback();
+    this._foregroundRecovery=()=>{
+      if(document.visibilityState==='hidden'||!this.isConnected)return;
+      this._render();
+      for(const view of this.views){this._viewHost=view;this._attachMediaElements();view.requestUpdate();}
+      if(this._sipUA&&this._answeredByMe&&!this._sipRoomMedia)this._startSIPRoomMedia(this._sipUA,this._webrtcConfig?.ice_servers||[]);
+    };
+    document.addEventListener('visibilitychange',this._foregroundRecovery);
+    window.addEventListener('pageshow',this._foregroundRecovery);
     this._connectHA();
     if (!this._mediaDevicesLoaded) this._refreshMediaDevices(false);
     this._timerInterval = setInterval(() => {
@@ -81,6 +89,8 @@ export class CallSession extends CardController {
 
   disconnectedCallback() {
     super.disconnectedCallback();
+    document.removeEventListener('visibilitychange',this._foregroundRecovery);
+    window.removeEventListener('pageshow',this._foregroundRecovery);
     clearInterval(this._timerInterval);
     clearInterval(this._userHeartbeatInterval);
     clearTimeout(this._incomingCallTimeout);

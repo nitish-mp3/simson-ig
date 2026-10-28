@@ -431,12 +431,18 @@ configure_room:
       default: none
       selector:
         select:
-          options: [none, browser, adapter]
+          options: [none, browser, ha_camera, adapter]
     sip_extension:
       selector:
         text:
+    sip_auto_mode:
+      description: Native SIP rooms request manual pickup, auto-answer, or speaker auto-answer. The handset must support and allow trusted auto-answer.
+      default: speaker
+      selector:
+        select:
+          options: [off, answer, speaker]
     camera_entity:
-      description: Discoverable source binding. Adapter must publish its video into the call; selecting it does not do so automatically.
+      description: Native SIP rooms receive this camera directly on the accepting caregiver's device. Browser-audio rooms forward it through the room browser. Custom adapters publish their own video.
       selector:
         entity:
           domain: camera
@@ -444,6 +450,20 @@ configure_room:
       selector:
         entity:
           domain: [media_player, remote]
+    display_mode:
+      default: cast
+      selector:
+        select:
+          options: [cast, adapter]
+    cast_dashboard:
+      description: Dashboard URL path. Room setup creates the default managed screen dashboard.
+      default: simson-room-screens
+      selector:
+        text:
+    cast_view:
+      description: View path; generated from the room identity when omitted.
+      selector:
+        text:
     start_script:
       description: Receives session_id, room_id, identities, devices, call_id and audio_policy. Must return promptly and report real component readiness.
       selector:

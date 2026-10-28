@@ -2,22 +2,26 @@ import asyncio
 
 
 async def start_user_call(hass, call):
+    return await start_user_call_data(hass, call.data, call.context.user_id)
+
+
+async def start_user_call_data(hass, data, actor_user_id=None):
     from homeassistant.exceptions import HomeAssistantError
 
-    entity = hass.states.get(call.data.get("entity_id", "")) if call.data.get("entity_id") else None
+    entity = hass.states.get(data.get("entity_id", "")) if data.get("entity_id") else None
     if entity and entity.attributes.get("simson_contact"):
         owner = hass.data.get("simson", {}).get(entity.attributes.get("entry_id"), {})
         node_id = entity.attributes.get("node_id")
         target_id = entity.attributes.get("user_id")
     else:
-        node_id = call.data.get("node_id", "")
-        target_id = call.data.get("target_user_id", "")
+        node_id = data.get("node_id", "")
+        target_id = data.get("target_user_id", "")
         owner = next((data for data in hass.data.get("simson", {}).values()
             if isinstance(data, dict) and data.get("coordinator") and (data["coordinator"].data or {}).get("node_id") == node_id), {})
     client = owner.get("client")
     if not client or not node_id or not target_id:
         raise HomeAssistantError("This contact's node is unavailable")
-    caller_id = call.context.user_id or call.data.get("caller_user_id", "")
+    caller_id = actor_user_id or data.get("caller_user_id", "")
     if not caller_id:
         raise HomeAssistantError("An unattended script must provide caller_user_id")
     caller = await hass.auth.async_get_user(caller_id)
@@ -44,12 +48,12 @@ async def start_user_call(hass, call):
         result = await client.make_call(target_node_id=node_id,
             target_user_id=target_id, target_user_name=target.name or "User",
             caller_user_id=caller_id, caller_user_name=caller.name or "User",
-            call_type=call.data.get("call_type", "voice"))
+            call_type=data.get("call_type", "voice"))
         if result.get("call_id"):
             hass.bus.async_fire("simson_user_call_started", {
                 "node_id": node_id, "call_id": result["call_id"],
                 "caller_user_id": caller_id, "target_user_id": target_id,
                 "target_user_name": target.name or "User",
-                "call_type": call.data.get("call_type", "voice"),
-                "interactive": bool(call.context.user_id)})
+                "call_type": data.get("call_type", "voice"),
+                "interactive": bool(actor_user_id)})
         return result

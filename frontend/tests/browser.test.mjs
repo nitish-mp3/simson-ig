@@ -16,6 +16,7 @@ before(async () => {
     const url = new URL(request.url,'http://localhost');
     let file;
     if (url.pathname.startsWith('/simson/www/')) file=path.join(integrationRoot,'custom_components/simson/www',url.pathname.slice(12));
+    else if(url.pathname.startsWith('/test-src/'))file=path.join(integrationRoot,'frontend/src',url.pathname.slice(10));
     else if(url.pathname.startsWith('/local/'))file=path.join(integrationRoot,'www',url.pathname.slice(7));
     else if(url.pathname.startsWith('/addon/ui/'))file=path.join(root,'addon/app/ui',url.pathname.slice(10));
     else if(url.pathname.startsWith('/addon/api/')) {
@@ -27,7 +28,14 @@ before(async () => {
     } else if(url.pathname==='/api/webrtc-config') {
       response.writeHead(200,{'content-type':'application/json'});response.end('{"ice_servers":[],"sip":{"enabled":false}}');return;
     } else {response.writeHead(200,{'content-type':'text/html'});response.end(fixture);return;}
-    try { const data=await readFile(file);response.writeHead(200,{'content-type':file.endsWith('.css')?'text/css':'text/javascript'});response.end(data); }
+    try {
+      let data=await readFile(file);
+      const headers={'content-type':file.endsWith('.css')?'text/css':'text/javascript','vary':'Accept-Encoding'};
+      if(request.headers['accept-encoding']?.includes('gzip')) {
+        try {data=await readFile(file+'.gz');headers['content-encoding']='gzip';} catch {}
+      }
+      response.writeHead(200,headers);response.end(data);
+    }
     catch {response.writeHead(404);response.end('missing');}
   });
   await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
@@ -67,6 +75,77 @@ test('registers all aliases before the runtime finishes downloading',async()=>{
   await page.addScriptTag({type:'module',url:origin+'/simson/www/simson-card.js'});
   assert.equal(await page.evaluate(()=>['simson-relay-card','simson-card','simson-call-card'].every(name=>Boolean(customElements.get(name)))),true);
   release();await page.close();
+});
+
+test('dedicated Cast screen loads without the shared card bootstrap or lazy chunks',async()=>{
+  const page=await browser.newPage();
+  try {
+    const scripts=[];
+    page.on('request',request=>{if(request.resourceType()==='script')scripts.push(request.url());});
+    await page.goto(origin,{waitUntil:'domcontentloaded'});
+    await page.addScriptTag({type:'module',url:origin+'/simson/www/simson-cast-room-screen.js'});
+    await page.evaluate(()=>{
+      const card=document.createElement('simson-cast-room-screen');
+      card.setConfig({node_id:'site',room_id:'living',title:'Living room call'});
+      card.hass={callWS:async()=>({response:{}})};
+      document.querySelector('#mount').append(card);
+    });
+    await page.getByText('Waiting for a room call',{exact:true}).waitFor();
+    assert.equal(await page.getByRole('heading',{name:'Living room call'}).count(),1);
+    assert.equal(await page.evaluate(()=>Boolean(customElements.get('simson-relay-card'))),false);
+    assert.equal(scripts.some(url=>url.includes('/chunks/')||url.includes('/simson-card.js')),false);
+  } finally {
+    await page.close();
+  }
+});
+
+test('room station is opt-in, owner-scoped, skips old calls and joins a new exact room session',async()=>{
+  const page=await browser.newPage();await load(page);
+  await page.evaluate(()=>{
+    window.roomRequests=[];
+    window.mockHass.states['sensor.room']={state:'idle',attributes:{simson_room:true,node_id:'office',room_id:'101',room_user_id:'user1',audio_mode:'browser',video_mode:'ha_camera',revision:1,session_id:'old-session'}};
+    window.mockHass.callWS=async request=>{
+      window.roomRequests.push(request);
+      if(request.service==='get_room_media')return {response:{session_id:request.service_data.session_id}};
+      return {response:{owned:true}};
+    };
+    const station=document.createElement('simson-room-source-card');station.setConfig({entity:'sensor.room'});station.hass=window.mockHass;
+    document.getElementById('mount').append(station);window.station=station;
+  });
+  await page.waitForFunction(()=>window.station._display);
+  assert.equal(await page.evaluate(()=>window.roomRequests.length),0);
+  await page.evaluate(()=>window.station._display._arm());
+  const result=await page.evaluate(async()=>{
+    const station=window.station._display;
+    await station.updateComplete;
+    const session=station._card.session;window.sourceJoins=[];
+    session._onHAUserCallStarted=event=>{window.sourceJoins.push(event);};session._joinUserCall=()=>{};
+    await station._tick();
+    const before=window.sourceJoins.length;
+    const state=window.mockHass.states['sensor.room'];state.state='ringing';Object.assign(state.attributes,{session_id:'new-session',call_id:'new-call',target_user_id:'pika',started_at:Date.now()/1000+1});
+    await station._tick();await station._tick();
+    const calls=window.sourceJoins.slice();await station._disarm();
+    return {before,calls,armed:station._armed,release:window.roomRequests.some(request=>request.service_data?.operation==='release')};
+  });
+  assert.equal(result.before,0);assert.equal(result.calls.length,1);assert.equal(result.calls[0].call_id,'new-call');assert.equal(result.armed,false);assert.equal(result.release,true);
+  await page.close();
+});
+
+test('room station rejects other users and SIP profiles before requesting a microphone',async()=>{
+  const page=await browser.newPage();await load(page);
+  await page.evaluate(()=>{
+    window.microphoneRequests=0;navigator.mediaDevices.getUserMedia=async()=>{window.microphoneRequests++;throw Error('must not open');};
+    window.mockHass.callWS=async()=>({response:{}});
+    window.mockHass.states['sensor.room']={state:'idle',attributes:{simson_room:true,node_id:'office',room_id:'101',room_user_id:'another-user',audio_mode:'browser'}};
+    const station=document.createElement('simson-room-source-card');station.setConfig({entity:'sensor.room'});station.hass=window.mockHass;document.getElementById('mount').append(station);window.station=station;
+  });
+  await page.waitForFunction(()=>window.station._display);
+  const errors=await page.evaluate(async()=>{
+    const station=window.station._display;await station._arm();const owner=station._error;
+    Object.assign(window.mockHass.states['sensor.room'].attributes,{room_user_id:'user1',audio_mode:'sip'});await station._arm();
+    return {owner,sip:station._error,microphones:window.microphoneRequests};
+  });
+  assert.match(errors.owner,/Sign in/);assert.match(errors.sip,/SIP audio/);assert.equal(errors.microphones,0);await page.close();
 });
 
 test('mobile bootstrap recovers a stale runtime and tolerates malformed third-party metadata',async()=>{
@@ -589,6 +668,12 @@ async function loadRoomWorkspace(page, count=0) {
           if(index>=0)rooms[index]=profile;else rooms.push(profile);
           return {response:{room_id:data.room_id}};
         }
+        if(['start_room_call','end_room_call'].includes(request.service)){
+          const data=request.service_data;window.roomActions.push({domain:'simson',service:request.service,data});
+          const room=window.roomData.nodes[0].rooms.find(room=>room.room_id===data.room_id);
+          room.session=request.service==='start_room_call'?{state:'ringing',session_id:'only-this-session'}:{state:'ended',session_id:'only-this-session'};
+          return {response:room.session};
+        }
       },callService:async(domain,service,data)=>{
         if(!['start_room_call','end_room_call'].includes(service))return;
         window.roomActions.push({domain,service,data});
@@ -603,6 +688,48 @@ async function loadRoomWorkspace(page, count=0) {
   await page.getByRole('heading',{name:'Room workspace'}).waitFor();
   await page.getByRole('button',{name:'Add room',exact:true}).waitFor({state:'visible'});
 }
+
+test('room setup saves native SIP audio with HA camera without requiring a room browser or scripts',async()=>{
+  const page=await browser.newPage();await loadRoomWorkspace(page);
+  await page.evaluate(()=>{
+    window.roomData.capabilities={ha_camera:true,cast_display:true,native_sip_room_profiles:true};
+    window.roomData.nodes[0].native_sip_rooms=true;
+  });
+  await page.getByRole('button',{name:'Refresh devices',exact:true}).click();
+  await page.getByRole('button',{name:'Add room',exact:true}).click();
+  await page.locator('input[name=label]').fill('SIP room');
+  await page.locator('select[name=room_user_id]').selectOption('room');
+  await page.locator('select[name=caregiver_user_id]').selectOption('caregiver');
+  await page.locator('select[name=video_mode]').selectOption('ha_camera');
+  await page.locator('input[name=camera_entity]').fill('camera.room');
+  await page.locator('select[name=audio_mode]').selectOption('sip');
+  assert.equal(await page.locator('select[name=video_mode]').inputValue(),'ha_camera');
+  await page.locator('input[name=sip_extension]').fill('1040');
+  await page.locator('select[name=sip_auto_mode]').selectOption('speaker');
+  await page.getByRole('button',{name:'Save room',exact:true}).click();
+  await page.getByText('Room saved. Its entities and enabled trigger are updated automatically.').waitFor();
+  const saved=await page.evaluate(()=>window.roomRPC.find(request=>request.service==='configure_room').service_data);
+  assert.equal(saved.sip_extension,'1040');assert.equal(saved.sip_auto_mode,'speaker');
+  assert.equal(saved.video_mode,'ha_camera');assert.equal(saved.start_script,'');
+  assert.equal(saved.stop_script,'');assert.equal(await page.evaluate(()=>window.roomActions.length),0);
+  assert.equal(await page.locator('simson-room-source-runtime').count(),0);
+  await page.close();
+});
+
+test('a staged frontend refuses native camera settings on an older backend without side effects',async()=>{
+  const page=await browser.newPage();await loadRoomWorkspace(page);
+  await page.getByRole('button',{name:'Add room',exact:true}).click();
+  await page.locator('input[name=label]').fill('Room camera');
+  await page.locator('select[name=room_user_id]').selectOption('room');
+  await page.locator('select[name=caregiver_user_id]').selectOption('caregiver');
+  await page.locator('select[name=video_mode]').selectOption('ha_camera');
+  await page.locator('input[name=camera_entity]').fill('camera.room');
+  await page.getByRole('button',{name:'Save room',exact:true}).click();
+  await page.getByRole('alert').filter({hasText:'has not loaded'}).waitFor();
+  assert.equal(await page.evaluate(()=>window.roomRPC.filter(request=>request.service==='configure_room').length),0);
+  assert.equal(await page.evaluate(()=>window.roomActions.length),0);
+  await page.close();
+});
 
 test('room workspace creates, edits, duplicates and deletes room bindings without YAML or test calls',async()=>{
   const page=await browser.newPage({viewport:{width:1240,height:1024}});await loadRoomWorkspace(page);
@@ -694,6 +821,125 @@ test('room controller stays compact on mobile, escapes names and scopes cleanup 
     {node_id:'office',room_id:'101',session_id:'exact-session'}]);
   assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
   await page.screenshot({path:path.join(integrationRoot,'frontend/test-results/room-mobile.png')});
+  await page.close();
+});
+
+test('an active sensor advances a room call when its status event was missed',async()=>{
+  const page=await browser.newPage();await load(page);
+  const result=await page.evaluate(async()=>{
+    const call=document.querySelector('simson-relay-card')._card.session;
+    let starts=0;call._startWebRTC=async()=>{starts++;};
+    call._onHAUserCallStarted({node_id:'office',call_id:'room-live',caller_user_id:'user1',target_user_id:'user2',target_user_name:'Caregiver',call_type:'video',interactive:true});
+    await call._joinUserCall();
+    const active={call_id:'room-live',state:'active',direction:'outgoing',caller_user_id:'user1',target_user_id:'user2',local_user_call:true,call_type:'video',remote_node_id:'office'};
+    call.hass={...window.mockHass,states:{...window.mockHass.states,
+      'sensor.simson_office_call_state':{state:'active',attributes:active},
+      'sensor.simson_office_calls_count':{state:'1',attributes:{active_calls:[active]}}}};
+    await call.updateComplete;
+    return {starts,state:call._callState(),initiatedHere:call._initiatedHere};
+  });
+  assert.equal(result.state,'active');assert.equal(result.initiatedHere,true);assert.equal(result.starts,1);
+  await page.close();
+});
+
+test('fresh empty call sensors release a stale event snapshot without trusting older empty data',async()=>{
+  const page=await browser.newPage();await load(page);
+  const result=await page.evaluate(async()=>{
+    const call=document.querySelector('simson-relay-card')._card.session;
+    call._eventCallSnapshot={call_id:'ended-room',state:'active',direction:'outgoing',caller_user_id:'user1',_receivedAt:Date.now()-10000};
+    call._currentCallId='ended-room';
+    const states={...window.mockHass.states,'sensor.simson_office_calls_count':{state:'0',last_updated:new Date(Date.now()-20000).toISOString(),attributes:{active_calls:[]}}};
+    call._hass={...window.mockHass,states};
+    const before=call._callState();
+    states['sensor.simson_office_calls_count']={...states['sensor.simson_office_calls_count'],last_updated:new Date().toISOString()};
+    return {before,after:call._callState()};
+  });
+  assert.equal(result.before,'active');assert.equal(result.after,'idle');await page.close();
+});
+
+test('native SIP room decodes independent room and caregiver videos with no room browser sender',async()=>{
+  const page=await browser.newPage();await load(page);
+  await page.evaluate(async()=>{
+    const {SipRoomMedia}=await import('/test-src/transport/sip-room-media.js');
+    const context={node_id:'office',room_id:'101',call_id:'sip-room-call',session_id:'sip-room-session',
+      media_role:'sip_caregiver',camera_entity:'camera.room',display_entity:'media_player.tv',display_mode:'cast'};
+    window.mediaRequests=[];window.cameraRequests=[];
+    const hass={callWS:async request=>{
+      const data=request.service_data;window.mediaRequests.push(request);
+      if(request.service==='get_room_media')return {response:context};
+      if(request.service==='report_room_component')return {response:{}};
+      if(data.operation==='viewer_poll'){window.displayViewer=data.client_id;return {response:window.displayOffer||{}};}
+      if(data.operation==='publisher_poll')return {response:{viewers:window.displayViewer?[{viewer_id:window.displayViewer,answer:window.displayAnswer||'',generation:'native-one'}]:[]}};
+      if(data.operation==='offer'){window.displayOffer={offer:data.sdp,generation:'native-one'};return {response:{generation:'native-one'}};}
+      if(data.operation==='answer'){window.displayAnswer=data.sdp;return {response:{}};}
+      return {response:{}};
+    }};
+    const canvas=document.createElement('canvas');canvas.width=400;canvas.height=200;
+    const draw=()=>{const brush=canvas.getContext('2d');brush.fillStyle=`hsl(${Date.now()%360},80%,50%)`;brush.fillRect(0,0,400,200);};
+    draw();window.roomDraw=setInterval(draw,40);window.roomCamera=canvas.captureStream(25);
+    const remote=document.createElement('video');remote.id='native-room-camera';remote.muted=true;remote.autoplay=true;document.body.append(remote);
+    const audio={sipAudio:true};
+    const host=window.nativeHost={_currentCallId:context.call_id,_answeredByMe:true,isConnected:true,_hass:hass,
+      _remoteAudio:{srcObject:audio},_render(){},_mediaConstraints:()=>({video:true}),
+      _attachMediaElements(){remote.srcObject=this._remoteStream;remote.play();}};
+    const screen=document.createElement('simson-room-display-card');screen.setConfig({node_id:'office',room_id:'101'});screen.hass=hass;
+    document.getElementById('mount').replaceChildren(screen);window.nativeScreen=screen;
+    const media=window.nativeMedia=new SipRoomMedia(host,context,[],{
+      openCamera:async()=>({stream:window.roomCamera,close(){window.roomCamera.getTracks().forEach(track=>track.stop());}}),
+      captureCamera:async constraints=>{window.cameraRequests.push(constraints);return navigator.mediaDevices.getUserMedia(constraints);},
+    });
+    await media.openVideo();await media.enableCamera();window.expectedAudio=audio;
+  });
+  await page.waitForFunction(()=>document.querySelector('#native-room-camera').videoWidth===400);
+  await page.waitForFunction(()=>window.nativeScreen._display?.shadowRoot.querySelector('video')?.videoWidth>0,null,{timeout:20000});
+  const result=await page.evaluate(()=>{
+    const peer=[...window.nativeMedia.publisher.peers.values()][0].peer;
+    const result={audioUnchanged:window.nativeHost._remoteAudio.srcObject===window.expectedAudio,
+      captures:window.cameraRequests,descriptions:window.mediaRequests.filter(message=>message.service_data?.sdp).map(message=>message.service_data.sdp),
+      camera:window.nativeMedia.local.getVideoTracks()[0],room:window.roomCamera.getVideoTracks()[0]};
+    window.nativeMedia.close();window.nativeScreen.remove();clearInterval(window.roomDraw);
+    return {...result,camera:result.camera.readyState,room:result.room.readyState,peer:peer.connectionState};
+  });
+  assert.equal(result.audioUnchanged,true);assert.equal(result.captures.length,1);assert.equal(result.captures[0].audio,false);
+  assert.equal(result.descriptions.length,2);assert.ok(result.descriptions.every(sdp=>!/^m=audio /m.test(sdp)));
+  assert.equal(result.camera,'ended');assert.equal(result.room,'ended');assert.equal(result.peer,'closed');
+  await page.close();
+});
+
+test('room Cast screen decodes caregiver video without audio and releases its relay',async()=>{
+  const page=await browser.newPage();await load(page);
+  const source=await readFile(path.join(integrationRoot,'frontend/src/transport/room-display-relay.js'),'utf8');
+  await page.addScriptTag({type:'module',content:source+'\nwindow.RoomDisplayPublisher=RoomDisplayPublisher;'});
+  await page.waitForFunction(()=>Boolean(window.RoomDisplayPublisher));
+  await page.evaluate(()=>{
+    const context={node_id:'office',room_id:'101',call_id:'room-call',session_id:'room-session',ice_servers:[]};
+    window.screenMessages=[];window.displayViewer=null;window.displayOffer=null;window.displayAnswer=null;
+    const hass={callWS:async request=>{
+      if(request.service==='get_room_media')return {response:context};
+      const data=request.service_data;window.screenMessages.push(data);
+      if(request.service==='report_room_component')return {response:{}};
+      if(data.operation==='viewer_poll'){window.displayViewer=data.client_id;return {response:window.displayOffer||{}};}
+      if(data.operation==='publisher_poll')return {response:{viewers:window.displayViewer?[{viewer_id:window.displayViewer,answer:window.displayAnswer||'',generation:'offer-one'}]:[]}};
+      if(data.operation==='offer'){window.displayOffer={offer:data.sdp,generation:'offer-one'};return {response:{generation:'offer-one'}};}
+      if(data.operation==='answer'){window.displayAnswer=data.sdp;return {response:{}};}
+      return {response:{}};
+    }};
+    const canvas=document.createElement('canvas');canvas.width=320;canvas.height=180;
+    const draw=()=>{const context=canvas.getContext('2d');context.fillStyle=`hsl(${Date.now()%360},80%,50%)`;context.fillRect(0,0,320,180);};
+    draw();window.screenDraw=setInterval(draw,40);window.caregiverVideo=canvas.captureStream(25);
+    const screen=document.createElement('simson-room-display-card');screen.setConfig({node_id:'office',room_id:'101'});screen.hass=hass;
+    document.getElementById('mount').replaceChildren(screen);window.screen=screen;
+    window.publisher=new window.RoomDisplayPublisher(hass,context,window.caregiverVideo,[]);
+  });
+  await page.waitForFunction(()=>document.querySelector('simson-room-display-card')?._display?.shadowRoot?.querySelector('video')?.videoWidth===320,null,{timeout:20000});
+  await page.waitForFunction(()=>window.screenMessages.some(message=>message.operation==='viewer_ready'));
+  const result=await page.evaluate(()=>{
+    const descriptions=window.screenMessages.filter(message=>message.sdp).map(message=>message.sdp);
+    window.publisher.close();window.screen.remove();clearInterval(window.screenDraw);
+    return {descriptions,sourceTrack:window.caregiverVideo.getVideoTracks()[0].readyState,peers:window.publisher.peers.size};
+  });
+  assert.equal(result.descriptions.length,2);assert.ok(result.descriptions.every(sdp=>/^m=video /m.test(sdp)&&!/^m=audio /m.test(sdp)));
+  assert.equal(result.sourceTrack,'live');assert.equal(result.peers,0);
   await page.close();
 });
 
