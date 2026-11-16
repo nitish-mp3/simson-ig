@@ -20,3 +20,20 @@ def can_control_call(call: dict, user_id: str, action: str) -> bool:
     if action in ("answer", "reject"):
         return call.get("state") in ("incoming", "ringing")
     return answered == user_id
+
+
+def mapped_notification_user(hass, node_id: str, call: dict, user_id: str, notify_service: str) -> str:
+    """Authorize an explicitly mapped Companion device for this exact recipient."""
+    if not user_id or not notify_service or not call:
+        return ""
+    metadata = call.get("metadata") or {}
+    recipient = call.get("target_user_id") or metadata.get("target_user_id")
+    if recipient != user_id:
+        return ""
+    for entry_data in hass.data.get("simson", {}).values():
+        coordinator = entry_data.get("coordinator") if isinstance(entry_data, dict) else None
+        node = (coordinator.data or {}).get("node_id") if coordinator else ""
+        target = entry_data.get("user_notification_targets", {}).get(user_id, {}) if coordinator else {}
+        if node == node_id and target.get("service") == notify_service:
+            return user_id
+    return ""

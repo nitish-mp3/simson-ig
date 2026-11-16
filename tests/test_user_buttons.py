@@ -40,7 +40,12 @@ async def test_button_identity_availability_and_authenticated_context(monkeypatc
     assert button.extra_state_attributes["simson_call_button"]
     button.entity_id = "button.call_recipient"
     button._context = SimpleNamespace(user_id="caller")
-    button.hass = SimpleNamespace(services=SimpleNamespace(async_call=AsyncMock()))
+    button.hass = SimpleNamespace(data={"simson": {"entry": {
+        "user_notification_status": {"recipient": {"status": "sent"}},
+        "user_notification_targets": {"recipient": {"service": "notify.mobile_app_phone"}},
+    }}}, services=SimpleNamespace(async_call=AsyncMock()))
+    assert button.extra_state_attributes["notification"]["status"] == "sent"
+    assert button.extra_state_attributes["notification_target"]["service"] == "notify.mobile_app_phone"
     await button.async_press()
     button.hass.services.async_call.assert_awaited_once_with("simson", "call_user",
         {"entity_id": "button.call_recipient"}, blocking=True, context=button._context)

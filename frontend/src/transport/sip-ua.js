@@ -70,6 +70,22 @@ export class MinimalSIPUA {
       this._onError && this._onError(new Error("SIP not registered"));
       return;
     }
+    await this.prepareMedia();
+    if (!this._pc || this._intentionalClose || this._callId) return;
+    this._callId = this._rand(16) + "@" + this._domain();
+    this._lastAck = null;
+    const target = "sip:" + extension + "@" + this._domain();
+    this._inviteCSeq = this._cseq;
+    this._send(this._buildRequest("INVITE", target, this._callId, this._cseq++, "",
+      this._pc.localDescription.sdp));
+  }
+
+  // Gather media while an outgoing destination rings, without joining its bridge.
+  prepareMedia() {
+    return this._preparePromise ||= this._prepareMedia();
+  }
+
+  async _prepareMedia() {
     const generation=this._callGeneration=(this._callGeneration || 0)+1;
     try {
       const stream = await this._captureMedia();
@@ -96,13 +112,6 @@ export class MinimalSIPUA {
     await this._pc.setLocalDescription(offer);
     await this._waitICE();
     if(generation!==this._callGeneration || !this._pc || this._intentionalClose)return;
-
-    this._callId = this._rand(16) + "@" + this._domain();
-    this._lastAck = null;
-    const target = "sip:" + extension + "@" + this._domain();
-    this._inviteCSeq = this._cseq;
-    this._send(this._buildRequest("INVITE", target, this._callId, this._cseq++, "",
-      this._pc.localDescription.sdp));
   }
 
   hangup() {
@@ -424,6 +433,7 @@ export class MinimalSIPUA {
   // ── Cleanup ───────────────────────────────────────────────────
 
   _cleanup() {
+    this._preparePromise = null;
     this._callGeneration=(this._callGeneration || 0)+1;
     if (this._regInterval) { clearInterval(this._regInterval); this._regInterval = null; }
     if (this._pc) { this._pc.close(); this._pc = null; }

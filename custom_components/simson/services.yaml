@@ -361,14 +361,16 @@ call_user:
 
 set_user_notification_target:
   name: Set User Call Notification Phone
-  description: Administrator-only mapping of one Simson contact to their Companion-app phone. Leave the notify service empty to disable.
+  description: Administrator-only mapping of one Simson contact sensor or Call button to their Companion-app phone. Leave the notify service empty to disable.
   fields:
     entity_id:
       required: true
       selector:
         entity:
           integration: simson
-          domain: sensor
+          domain:
+            - sensor
+            - button
     notify_service:
       description: For example notify.mobile_app_your_phone. Select only a phone belonging to this user.
       selector:
@@ -393,7 +395,9 @@ test_user_notification:
       selector:
         entity:
           integration: simson
-          domain: sensor
+          domain:
+            - sensor
+            - button
 
 get_room_configuration:
   name: Get Room Workspace Configuration

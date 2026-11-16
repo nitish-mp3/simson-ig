@@ -1,6 +1,8 @@
 import { ICE_SERVERS } from '../transport/ice.js';
 export const withSipBridge = Base => class extends Base {
 _cleanupSIPUA() {
+    clearInterval(this._sipStatsInterval);
+    this._sipStatsInterval = null;
     this._sipRoomMedia?.close();
     this._sipRoomMedia=null;
     this._sipRoomMediaGeneration=(this._sipRoomMediaGeneration||0)+1;
@@ -10,6 +12,7 @@ _cleanupSIPUA() {
       this._sipUA = null;
     }
     this._pendingSIPBridgeId = null;
+    this._sipDialRequested = false;
     this._sipAudioStream=null;
   }
 
@@ -29,15 +32,18 @@ _endActiveCallFromSip() {
     this._callService("hangup_call", { call_id: callId }).catch(() => {});
   }
 
-async _startSIPCall(bridgeId) {
+async _startSIPCall(bridgeId, prepareOnly = false) {
     console.log("[Simson SIP] _startSIPCall:", bridgeId);
     if (!bridgeId || (!this._initiatedHere && !this._answeredByMe && !this._answerPendingCallId)) return;
+    if (!prepareOnly) this._sipDialRequested = true;
     // Guard against double-start: set pending flag BEFORE the async gap so a second
     // call (from set hass() sensor update racing with the HA event) exits early.
     if (this._pendingSIPBridgeId === bridgeId || (this._sipUA && this._sipUA._activeBridge === bridgeId)) {
+      if (this._sipDialRequested && this._sipUA?.registered) this._dialPreparedSIPBridge(this._sipUA, bridgeId);
       console.log("[Simson SIP] already connecting/in bridge", bridgeId); return;
     }
     this._pendingSIPBridgeId = bridgeId;
+    this._stopMediaPreview?.(false);
     this._mediaDeviceError = '';
     this._actionError = '';
     // Tear down any previous UA but preserve our pending flag.
@@ -79,13 +85,12 @@ async _startSIPCall(bridgeId) {
         if(this._sipUA!==ua)return;
         ua._activeBridge = bridgeId;
         this._pendingSIPBridgeId = null;
-        ua.dial(bridgeId).catch(e => {
-          if(this._sipUA!==ua)return;
-          console.error("Simson SIP dial error:", e);
-          this._mediaDeviceError = 'The media connection failed. ' + (e?.message || 'Could not join the SIP media bridge. Please retry.');
-          this._cleanupSIPUA();
-          this._render();
+        ua.prepareMedia().catch(e => {
+          if (this._sipUA !== ua) return;
+          this._mediaDeviceError = 'The media connection failed. ' + e.message;
+          this._cleanupSIPUA(); this._render();
         });
+        if (this._sipDialRequested) this._dialPreparedSIPBridge(ua, bridgeId);
       },
       onError: (e) => {
         if(this._sipUA!==ua)return;
@@ -106,6 +111,18 @@ async _startSIPCall(bridgeId) {
     this._sipUA=ua;
     ua.connect();
     this._startSIPRoomMedia(ua,cfg.ice_servers||ICE_SERVERS);
+  }
+
+_dialPreparedSIPBridge(ua, bridgeId) {
+    if (ua._bridgeDialStarted) return;
+    ua._bridgeDialStarted = true;
+    clearInterval(this._sipStatsInterval);
+    this._sipStatsInterval = setInterval(() => this._updateQuality(), 3000);
+    ua.dial(bridgeId).catch(e => {
+      if (this._sipUA !== ua) return;
+      this._mediaDeviceError = 'The media connection failed. ' + (e?.message || 'Could not join phone audio.');
+      this._cleanupSIPUA(); this._render();
+    });
   }
 
 async _startSIPRoomMedia(ua,iceServers) {

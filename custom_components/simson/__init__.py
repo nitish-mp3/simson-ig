@@ -20,7 +20,7 @@ from homeassistant.components.http import HomeAssistantView
 from aiohttp import web
 
 from .api import SimsonApiClient
-from .call_access import can_control_call
+from .call_access import can_control_call, mapped_notification_user
 from .client_selection import client_for_node
 from .event_stream import setup_event_stream
 from .directory import register_directory
@@ -854,22 +854,23 @@ def _register_mobile_notification_actions(
         data = coordinator.data if coordinator and isinstance(coordinator.data, dict) else {}
         return str(data.get("node_id") or "").strip()
 
-    async def _run_action(action_name: str, call_id: str, notify_ref: str = "", user_id: str = "") -> None:
+    async def _run_action(action_name: str, call_id: str, notify_ref: str = "", user_id: str = "",
+                          mapped_user_id: str = "") -> None:
         try:
             calls_data = await client.calls()
             selected = next((item for item in calls_data.get("calls", []) if item.get("call_id") == call_id), None)
-            if not can_control_call(selected, user_id, "reject" if action_name == "decline" else action_name):
-                raise HomeAssistantError("Use the authenticated notification link to control your call")
+            authorized_user_id = mapped_notification_user(
+                hass, _entry_node_id(), selected, mapped_user_id, notify_ref
+            ) or user_id
+            if not can_control_call(selected, authorized_user_id, "reject" if action_name == "decline" else action_name):
+                raise HomeAssistantError("This call is no longer available to this user")
             if action_name == "answer":
                 result = await client.answer_call(
                     call_id,
                     strict_call_id=True,
-                    # Current notifications use the authenticated HTTP action
-                    # view, which answers and redirects in one foregrounded
-                    # request. Keep old custom-action notifications working,
-                    # but never issue command_webview in the background: Android
-                    # gates that command behind device permissions and can show
-                    # an unrelated command_bluetooth permission warning.
+                    # Native Companion actions run in HA without depending on
+                    # a browser session. Do not issue command_webview in the
+                    # background: Android gates that behind device permissions.
                     open_dashboard=False,
                 )
             elif action_name == "decline":
@@ -918,11 +919,12 @@ def _register_mobile_notification_actions(
             "SIMSON_DECLINE": "decline",
             "SIMSON_HANGUP": "hangup",
         }
-        parts = action.split("::", 3)
-        if len(parts) in (3, 4) and parts[0] in scoped_prefixes:
+        parts = action.split("::")
+        if len(parts) >= 3 and parts[0] in scoped_prefixes:
             action_node_id = unquote(parts[1]).strip()
             call_id = unquote(parts[2]).strip()
-            notify_ref = unquote(parts[3]).strip() if len(parts) == 4 else ""
+            mapped_user_id = unquote(parts[3]).strip() if len(parts) >= 4 else ""
+            notify_ref = unquote("::".join(parts[4:])).strip() if len(parts) >= 5 else ""
             # Every config entry has its own event listener. Scope the action
             # to the originating node so one button cannot answer/hang up a
             # different site's call.
@@ -930,7 +932,8 @@ def _register_mobile_notification_actions(
                 return
             if call_id:
                 hass.async_create_task(
-                    _run_action(scoped_prefixes[parts[0]], call_id, notify_ref, event.context.user_id or "")
+                    _run_action(scoped_prefixes[parts[0]], call_id, notify_ref,
+                        event.context.user_id or "", mapped_user_id)
                 )
             return
 

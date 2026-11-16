@@ -166,12 +166,14 @@ class SimsonUserContactSensor(SimsonBaseSensor):
     def extra_state_attributes(self):
         users = (self.coordinator.data or {}).get("local_users", [])
         user = next((item for item in users if item["user_id"] == self._user_id), {})
+        entry_data = self.hass.data.get(DOMAIN, {}).get(self._entry.entry_id, {}) if self.hass else {}
         return {"simson_contact": True, "contact_id": self._contact_id, "user_id": self._user_id,
             "entry_id": self._entry.entry_id,
             "node_id": (self.coordinator.data or {}).get("node_id", ""),
             "user_name": user.get("user_name", self._attr_name),
             "notification": self.hass.data.get(DOMAIN, {}).get(self._entry.entry_id, {})
-                .get("user_notification_status", {}).get(self._user_id, {}) if self.hass else {}}
+                .get("user_notification_status", {}).get(self._user_id, {}) if self.hass else {},
+            "notification_target": entry_data.get("user_notification_targets", {}).get(self._user_id)}
 
 
 class SimsonConnectionSensor(SimsonBaseSensor):

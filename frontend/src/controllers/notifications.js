@@ -4,7 +4,14 @@ _playRingtone() {
     try {
       const ctx = new (window.AudioContext || window.webkitAudioContext)();
       this._ringCtx = ctx;
-      this._ringLoop = setInterval(() => {
+      this._ringtoneBlocked = ctx.state === 'suspended';
+      ctx.onstatechange = () => {
+        if (this._ringCtx !== ctx) return;
+        this._ringtoneBlocked = ctx.state === 'suspended';
+        this._render();
+      };
+      const ring = () => {
+        if (this._ringCtx !== ctx || ctx.state === 'closed') return;
         const osc = ctx.createOscillator();
         const gain = ctx.createGain();
         osc.connect(gain); gain.connect(ctx.destination);
@@ -12,7 +19,8 @@ _playRingtone() {
         gain.gain.setValueAtTime(0.15, ctx.currentTime);
         gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.4);
         osc.start(ctx.currentTime); osc.stop(ctx.currentTime + 0.4);
-        setTimeout(() => {
+        this._ringSecondTone = setTimeout(() => {
+          if (this._ringCtx !== ctx || ctx.state === 'closed') return;
           const o2 = ctx.createOscillator();
           const g2 = ctx.createGain();
           o2.connect(g2); g2.connect(ctx.destination);
@@ -21,11 +29,17 @@ _playRingtone() {
           g2.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.4);
           o2.start(ctx.currentTime); o2.stop(ctx.currentTime + 0.4);
         }, 200);
-      }, 3000);
+      };
+      ctx.resume?.().catch(() => {});
+      ring();
+      this._ringLoop = setInterval(ring, 3000);
     } catch (e) { /* audio context not available */ }
   }
 
 _stopRingtone() {
+    this._ringtoneBlocked = false;
+    clearTimeout(this._ringSecondTone);
+    this._ringSecondTone = null;
     if (this._ringLoop) { clearInterval(this._ringLoop); this._ringLoop = null; }
     if (this._ringCtx) { this._ringCtx.close().catch(() => {}); this._ringCtx = null; }
   }

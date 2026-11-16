@@ -318,13 +318,13 @@ _attachRemoteAudio(stream, track = null) {
   }
 
 async _updateQuality() {
-    if (!this._pc) return;
+    const peer = this._pc || this._sipUA?._pc;
+    if (!peer) return;
     try {
-      const peer = this._pc;
       const callId = this._currentCallId;
       const stats = await peer.getStats();
-      if (this._pc !== peer || this._currentCallId !== callId) return;
-      await reportRoomMedia(this, stats);
+      if ((this._pc || this._sipUA?._pc) !== peer || this._currentCallId !== callId) return;
+      if (this._pc === peer) await reportRoomMedia(this, stats);
       if(this._roomMediaContext?.display_entity&&this._roomMediaContext.display_mode==='cast'&&this._remoteStream?.getVideoTracks().some(track=>track.readyState==='live')&&!this._roomDisplayPublisher){
         this._roomDisplayPublisher=new RoomDisplayPublisher(this._hass,this._roomMediaContext,this._remoteStream,this._webrtcConfig?.ice_servers||[]);
       }

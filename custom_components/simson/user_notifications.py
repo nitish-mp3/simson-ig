@@ -1,22 +1,32 @@
-from urllib.parse import urlencode, urlsplit, urlunsplit, parse_qsl
+from urllib.parse import urlencode, urlsplit, urlunsplit, parse_qsl, quote
 import asyncio
 from collections import OrderedDict
 from .companion_targets import user_companion_devices
 from .notification_links import dashboard_path as safe_dashboard_path
 
+RING_REMINDER_SECONDS = 10
 
-def incoming_notification(call_id, node_id, label, dashboard_path):
+
+def incoming_notification(call_id, node_id, label, dashboard_path, user_id="", notify_service=""):
     dashboard_path = safe_dashboard_path(dashboard_path)
     location = urlsplit(dashboard_path)
     def action_url(action):
         query = dict(parse_qsl(location.query))
         query.update(simson_action=action, simson_call=call_id, simson_node=node_id)
         return urlunsplit(("", "", location.path, urlencode(query), location.fragment))
+    def action_id(action):
+        return "::".join((f"SIMSON_{action.upper()}", quote(str(node_id), safe=""),
+            quote(str(call_id), safe=""), quote(str(user_id), safe=""),
+            quote(str(notify_service), safe="")))
     return {"title": "Incoming Simson call", "message": f"{label or 'A user'} is calling you",
-        "data": {"tag": f"simson_user_{call_id}", "persistent": True, "ttl": 0, "priority": "high",
+        "data": {"tag": f"simson_user_{call_id}", "persistent": True, "sticky": True,
+            "channel": "Simson User Calls v1", "importance": "high", "alert_once": False,
+            "push": {"sound": "default", "interruption-level": "time-sensitive"},
+            "ttl": 0, "priority": "high",
             "url": action_url("open"), "clickAction": action_url("open"), "actions": [
                 {"action": "URI", "title": "Answer", "uri": action_url("answer")},
-                {"action": "URI", "title": "Decline", "uri": action_url("decline")}]}}
+                {"action": action_id("decline"), "title": "Decline"},
+                {"action": "URI", "title": "Open call", "uri": action_url("open")} ]}}
 
 
 async def async_setup_user_notifications(hass, entry, coordinator):
@@ -34,7 +44,43 @@ async def async_setup_user_notifications(hass, entry, coordinator):
     data["user_notification_store"] = storage
     diagnostics = data["user_notification_status"] = {}
     deliveries = OrderedDict()
-    delivery_lock = asyncio.Lock()
+    delivery_locks = {}
+    reminders = {}
+
+    def stop_reminder(call_id):
+        task = reminders.pop(call_id, None)
+        if task and task is not asyncio.current_task():
+            task.cancel()
+
+    def unload():
+        for task in reminders.values():
+            task.cancel()
+        reminders.clear()
+
+    entry.async_on_unload(unload)
+
+    async def remind(event):
+        call_id = event.data["call_id"]
+        try:
+            while True:
+                await asyncio.sleep(RING_REMINDER_SECONDS)
+                async with asyncio.timeout(5):
+                    calls = await data["client"].calls()
+                live = next((call for call in calls.get("calls", []) if call.get("call_id") == call_id), None)
+                if not live or live.get("state") not in ("incoming", "ringing"):
+                    from types import SimpleNamespace
+                    await notify(SimpleNamespace(event_type="simson_call_status", data={
+                        **event.data, "status": "ended"}))
+                    return
+                await notify(event, reminder=True)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            # Never re-alert when current call state cannot be confirmed.
+            logger.debug("Cannot confirm ringing state for user-call reminder")
+        finally:
+            if reminders.get(call_id) is asyncio.current_task():
+                reminders.pop(call_id, None)
 
     async def test_notification(call):
         entity = hass.states.get(call.data["entity_id"])
@@ -78,41 +124,50 @@ async def async_setup_user_notifications(hass, entry, coordinator):
         service = call.data.get("notify_service", "")
         if service and (not service.startswith("notify.mobile_app_") or not hass.services.has_service("notify", service.removeprefix("notify."))):
             raise HomeAssistantError("Choose an existing Companion app notify service")
+        updated = dict(mapping)
         if call.data.get("automatic", False):
-            mapping.pop(entity.attributes["user_id"], None)
+            updated.pop(entity.attributes["user_id"], None)
         else:
-            mapping[entity.attributes["user_id"]] = {"service": service, "dashboard_path": call.data.get("dashboard_path", "/simson-call")}
-        await owner["user_notification_store"].async_save(mapping)
+            updated[entity.attributes["user_id"]] = {"service": service, "dashboard_path": safe_dashboard_path(call.data.get("dashboard_path", "/simson-call"))}
+        await owner["user_notification_store"].async_save(updated)
+        mapping.clear()
+        mapping.update(updated)
+        owner.get("coordinator") and owner["coordinator"].async_update_listeners()
 
     if not hass.services.has_service("simson", "set_user_notification_target"):
         hass.services.async_register("simson", "set_user_notification_target", set_target,
             schema=vol.Schema({vol.Required("entity_id"): str, vol.Optional("notify_service", default=""): str,
                 vol.Optional("dashboard_path", default="/simson-call"): str, vol.Optional("automatic", default=False): bool}))
 
-    async def notify(event):
+    async def notify(event, *, reminder=False):
         payload = event.data or {}
         metadata = payload.get("metadata") or {}
         node_id = (coordinator.data or {}).get("node_id", "")
         call_id = payload.get("call_id")
         if not call_id or not node_id or payload.get("node_id") != node_id:
             return
-        async with delivery_lock:
+        terminal = payload.get("status") in ("active", "ended", "failed", "missed", "declined", "timeout")
+        if event.event_type != "simson_incoming_call" and not terminal:
+            return
+        if terminal and event.event_type != "simson_incoming_call":
+            stop_reminder(call_id)
+        async with delivery_locks.setdefault(call_id, asyncio.Lock()):
+            if terminal and event.event_type != "simson_incoming_call":
+                stop_reminder(call_id)
             previous = deliveries.get(call_id, {})
             incoming = event.event_type == "simson_incoming_call"
             user_id = payload.get("target_user_id") or metadata.get("target_user_id") or previous.get("user_id")
             target = targets.get(user_id) or {}
-            service = (previous.get("service") if not incoming else "") or target.get("service", "")
-            push_targets = previous.get("push_targets", []) if not incoming else []
+            service = (previous.get("service") if not incoming or reminder else "") or target.get("service", "")
+            push_targets = previous.get("push_targets", []) if not incoming or reminder else []
             devices = []
             if not service and user_id not in targets:
                 devices = user_companion_devices(hass, user_id)
                 if devices:
                     service = "notify.mobile_app"
                     push_targets = [device["target"] for device in devices]
-            terminal = payload.get("status") in ("active", "ended", "failed", "missed", "declined", "timeout")
-            if not incoming and not terminal:
-                return
-            if incoming and previous.get("status") in ("sent", "cleared", "clear_failed"):
+            if incoming and (previous.get("status") in ("cleared", "clear_failed") or
+                    previous.get("status") == "sent" and not reminder):
                 return
             if terminal and previous.get("status") == "cleared":
                 return
@@ -130,7 +185,7 @@ async def async_setup_user_notifications(hass, entry, coordinator):
                     if caller:
                         label = caller.name or label
                 body = incoming_notification(call_id, node_id, payload.get("from_label"),
-                    target.get("dashboard_path") or "/simson-call") if incoming else {
+                    target.get("dashboard_path") or "/simson-call", user_id, service) if incoming else {
                     "message": "clear_notification", "data": {"tag": f"simson_user_{call_id}"}}
                 if incoming:
                     body["message"] = f"{label or 'A user'} is calling you"
@@ -146,9 +201,15 @@ async def async_setup_user_notifications(hass, entry, coordinator):
             record = {"call_id": call_id, "user_id": user_id, "service": service,
                 "status": status, "error": error_message, "device_count": len(push_targets) if push_targets else int(bool(service))}
             deliveries[call_id] = {**record, "push_targets": push_targets}
+            if incoming and service and data.get("client") and call_id not in reminders:
+                reminders[call_id] = asyncio.create_task(remind(event))
             deliveries.move_to_end(call_id)
             if len(deliveries) > 256:
-                deliveries.popitem(last=False)
+                expired_id, _ = deliveries.popitem(last=False)
+                stop_reminder(expired_id)
+                lock = delivery_locks.get(expired_id)
+                if lock and not lock.locked():
+                    delivery_locks.pop(expired_id, None)
             if user_id:
                 diagnostics[user_id] = record
             hass.bus.async_fire("simson_user_notification_status", {**record, "node_id": node_id})

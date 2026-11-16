@@ -16,10 +16,11 @@ test('opening a dashboard never adopts an already answered incoming call', () =>
 });
 
 test('local dialing renders immediately despite another call occupying the shared sensor', () => {
-  const attributes = {call_id:'other',direction:'outgoing',caller_user_id:'someone-else'};
+  const attributes = {call_id:'other',direction:'outgoing',caller_user_id:'someone-else',call_type:'sip',sip_bridge_id:'other-bridge'};
   const host = {_nodeId:()=> 'office',_isConnected:()=>true,_callState:()=> 'active',
     _activeCallAttr:(key,fallback='')=>attributes[key]??fallback,
-    _hass:{user:{id:'me'}},_isCaller:true,_outgoingIntentAt:Date.now(),
+    _hass:{user:{id:'me'}},_isCaller:true,_initiatedHere:true,_outgoingIntentAt:Date.now(),
+    _startSIPCall:()=>assert.fail('must not prepare another user\'s bridge'),
     _currentRemoteNode:'phone:59330025',_prevCallState:'requesting'};
   const view = reconcileCall.call(host);
   assert.equal(view.isRinging,true);

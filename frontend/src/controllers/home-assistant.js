@@ -98,6 +98,10 @@ _onHACallStatus(event) {
       this._isCaller = true;
       this._polite = false;
       this._outgoingIntentAt = Date.now();
+      if (call_type === 'sip' && sip_bridge_id && this._initiatedHere) {
+        this._sipBridgeId = sip_bridge_id;
+        this._startSIPCall(sip_bridge_id, true).catch(e => console.error('[Simson] SIP preparation:', e));
+      }
       this._stopRingtone();
       this._removePopup();
       this._dismissBrowserNotification();

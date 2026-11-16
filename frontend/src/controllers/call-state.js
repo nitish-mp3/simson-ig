@@ -37,6 +37,10 @@ export function reconcileCall() {
     const hasWebRTC = !!this._pc;
     const activeCallType = this._activeCallAttr("call_type", "");
     const activeSipBridgeId = this._activeCallAttr("sip_bridge_id", "");
+    if (isMyCall && !provisionalOutgoing && isRinging && direction === 'outgoing' && activeCallType === 'sip' && activeSipBridgeId && this._initiatedHere) {
+      this._sipBridgeId = activeSipBridgeId;
+      this._startSIPCall(activeSipBridgeId, true).catch(e => console.error('[Simson] SIP preparation:', e));
+    }
 
     const remoteLabel = (this._initiatedHere && this._currentRemoteLabel) || (provisionalOutgoing && String(this._currentRemoteNode || '').replace(/^phone:/, '')) || this._activeCallAttr("remote_name") ||
                         this._activeCallAttr("display_name") ||

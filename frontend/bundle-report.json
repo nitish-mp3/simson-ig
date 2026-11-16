@@ -3,43 +3,43 @@
     "bytes": 12019,
     "gzip": 4286
   },
-  "chunks/sip-ua-VCMB2GIH.js": {
-    "bytes": 13463,
-    "gzip": 4460
+  "chunks/sip-ua-GR4HQOLL.js": {
+    "bytes": 13651,
+    "gzip": 4525
   },
   "chunks/sip-room-media-DNWKOWYB.js": {
     "bytes": 5441,
     "gzip": 1912
   },
-  "chunks/card-RQ73ZHCM.js": {
+  "chunks/card-QS2JO2VK.js": {
     "bytes": 200,
-    "gzip": 130
+    "gzip": 129
   },
   "chunks/editor-6KVGOICP.js": {
     "bytes": 3082,
     "gzip": 1207
   },
-  "chunks/rooms-LJ27F42V.js": {
+  "chunks/rooms-4NLHL4ZV.js": {
     "bytes": 25448,
-    "gzip": 8200
+    "gzip": 8197
   },
   "chunks/screen-JOK64D3Q.js": {
     "bytes": 127,
     "gzip": 111
   },
-  "chunks/source-LPZUUFSI.js": {
+  "chunks/source-J4VDVYPF.js": {
     "bytes": 238,
-    "gzip": 150
+    "gzip": 149
   },
-  "chunks/chunk-25T4ZSXT.js": {
+  "chunks/chunk-ER3BSLZT.js": {
     "bytes": 6107,
     "gzip": 2402
   },
-  "chunks/chunk-I6JENUMV.js": {
-    "bytes": 108406,
-    "gzip": 29676
+  "chunks/chunk-YLON3KRG.js": {
+    "bytes": 112037,
+    "gzip": 30613
   },
-  "chunks/chunk-X5YNIC5E.js": {
+  "chunks/chunk-UO4OHK7T.js": {
     "bytes": 30,
     "gzip": 50
   },

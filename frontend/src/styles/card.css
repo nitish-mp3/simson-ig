@@ -620,6 +620,9 @@ footer span {
 .current-call-banner>span{display:grid;gap:4px;min-width:0;overflow-wrap:anywhere}
 .current-call-banner small{color:var(--muted)}
 .user-actions>button{white-space:normal;overflow-wrap:anywhere;min-height:48px}
+.user-notification-settings{display:grid;gap:8px;padding:16px;border:1px solid var(--line);border-radius:12px;background:var(--panel);min-width:0}
+.user-notification-settings h3,.user-notification-settings p{margin:0}
+.user-notification-settings .field{margin:4px 0}
 .dialog-heading{display:flex;align-items:center;justify-content:space-between;gap:12px}
 .call-dialog{width:min(100%,560px);max-width:560px}
 .call-dialog .call-workspace{padding-top:16px}

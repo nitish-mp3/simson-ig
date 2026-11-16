@@ -425,6 +425,8 @@ test('user-script popup is private, immediate and requires explicit browser medi
 test('per-user card detects its node, opens immediate controls and does not duplicate buttons as contacts',async()=>{
   const page=await browser.newPage({viewport:{width:390,height:844}});await load(page);
   await page.evaluate(()=>{
+    window.mockHass.user={id:'admin',name:'Admin',is_admin:true};
+    window.mockHass.services={notify:{mobile_app_room_phone:{name:'Room Phone'}}};
     window.mockHass.states['sensor.recipient']={state:'ready',attributes:{simson_contact:true,node_id:'office',user_id:'user2',user_name:'Recipient'}};
     window.mockHass.states['button.recipient']={state:'unknown',attributes:{simson_contact:true,simson_call_button:true,node_id:'office',user_id:'user2'}};
     const shell=document.createElement('simson-user-card');shell.setConfig({entity:'sensor.recipient'});shell.hass=window.mockHass;
@@ -434,6 +436,12 @@ test('per-user card detects its node, opens immediate controls and does not dupl
   await page.getByRole('button',{name:'Call Recipient',exact:true}).click();
   await page.getByText('Connecting to your call service',{exact:true}).waitFor({timeout:500});
   assert.deepEqual(await page.evaluate(()=>window.calls.find(call=>call.service==='call_user').data),{entity_id:'sensor.recipient',call_type:'voice'});
+  await page.getByRole('combobox',{name:'Phone'}).selectOption('mobile_app_room_phone');
+  await page.getByRole('button',{name:'Save phone mapping'}).click();
+  await page.waitForFunction(()=>window.calls.some(call=>call.service==='set_user_notification_target'));
+  assert.deepEqual(await page.evaluate(()=>window.calls.find(call=>call.service==='set_user_notification_target').data),{
+    entity_id:'sensor.recipient',notify_service:'notify.mobile_app_room_phone',dashboard_path:'/simson-call',automatic:false
+  });
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth),true);
   await page.close();
 });

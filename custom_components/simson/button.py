@@ -112,10 +112,14 @@ class SimsonUserCallButton(CoordinatorEntity, ButtonEntity):
 
     @property
     def extra_state_attributes(self):
+        hass = getattr(self, "hass", None)
+        hass_data = hass.data.get(DOMAIN, {}).get(self._entry.entry_id, {}) if hass else {}
         return {"simson_contact": True, "simson_call_button": True,
             "contact_id": self._contact_id, "user_id": self._user_id,
             "entry_id": self._entry.entry_id,
-            "node_id": (self.coordinator.data or {}).get("node_id", "")}
+            "node_id": (self.coordinator.data or {}).get("node_id", ""),
+            "notification": hass_data.get("user_notification_status", {}).get(self._user_id, {}),
+            "notification_target": hass_data.get("user_notification_targets", {}).get(self._user_id)}
 
     async def async_press(self):
         await self.hass.services.async_call(DOMAIN, "call_user",

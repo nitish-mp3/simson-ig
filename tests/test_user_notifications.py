@@ -16,20 +16,27 @@ module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)
 
 
-def test_notification_actions_use_authenticated_exact_call_urls():
-    notification = module.incoming_notification("call_one", "office", "Caller", "/lovelace/calls")
+def test_notification_buttons_use_native_actions_and_open_exact_call_in_frontend():
+    notification = module.incoming_notification("call_one", "office", "Caller", "/lovelace/calls",
+        "recipient", "notify.mobile_app_recipient")
     assert notification["data"]["persistent"] is True
     actions = notification["data"]["actions"]
-    assert len(actions) == 2
-    for action, expected in zip(actions, ("answer", "decline")):
-        url = urlsplit(action["uri"])
-        assert url.path == "/lovelace/calls"
-        assert parse_qs(url.query) == {"simson_node": ["office"], "simson_call": ["call_one"], "simson_action": [expected]}
+    assert [action["title"] for action in actions] == ["Answer", "Decline", "Open call"]
+    assert actions[0]["action"] == "URI"
+    assert parse_qs(urlsplit(actions[0]["uri"]).query)["simson_action"] == ["answer"]
+    assert actions[1]["action"] == "SIMSON_DECLINE::office::call_one::recipient::notify.mobile_app_recipient"
+    assert "uri" not in actions[1]
+    assert notification["data"]["sticky"] is True
+    assert notification["data"]["channel"] == "Simson User Calls v1"
+    assert notification["data"]["push"]["sound"] == "default"
+    url = urlsplit(actions[2]["uri"])
+    assert url.path == "/lovelace/calls"
+    assert parse_qs(url.query) == {"simson_node": ["office"], "simson_call": ["call_one"], "simson_action": ["open"]}
 
 
 def test_notification_links_preserve_dashboard_query_and_reject_external_redirects():
     payload = module.incoming_notification("call/id", "office", "Caller", "/lovelace/calls?view=door#panel")
-    location = urlsplit(payload["data"]["actions"][0]["uri"])
+    location = urlsplit(payload["data"]["actions"][2]["uri"])
     assert parse_qs(location.query)["view"] == ["door"]
     assert parse_qs(location.query)["simson_call"] == ["call/id"]
     assert location.fragment == "panel"
@@ -120,11 +127,15 @@ async def test_notifications_only_reach_the_mapped_user_on_the_matching_node(mon
 
 async def notification_fixture(monkeypatch, saved=None):
     storage = ModuleType("homeassistant.helpers.storage")
+    stores = []
     class FakeStore:
         def __init__(self, *args):
-            pass
+            self.saved = None
+            stores.append(self)
         async def async_load(self):
             return saved or {}
+        async def async_save(self, data):
+            self.saved = data
     storage.Store = FakeStore
     exceptions = ModuleType("homeassistant.exceptions")
     exceptions.HomeAssistantError = RuntimeError
@@ -136,14 +147,47 @@ async def notification_fixture(monkeypatch, saved=None):
         "homeassistant.exceptions": exceptions, "voluptuous": validation}.items():
         monkeypatch.setitem(sys.modules, name, value)
     listeners, handlers = {}, {}
-    services = SimpleNamespace(has_service=lambda *args: False, async_call=AsyncMock(),
+    services = SimpleNamespace(has_service=lambda domain, service: domain == "notify" and
+        (service == "mobile_app" or service.startswith("mobile_app_")), async_call=AsyncMock(),
         async_register=lambda domain, name, handler, **kwargs: handlers.update({name: handler}))
     auth = SimpleNamespace(async_get_user=AsyncMock(return_value=SimpleNamespace(id="caller", name="ds", is_admin=False)))
     hass = SimpleNamespace(data={"simson": {"entry": {}}}, auth=auth, services=services,
         bus=SimpleNamespace(async_listen=lambda name, callback: listeners.update({name: callback}), async_fire=Mock()))
     coordinator = SimpleNamespace(data={"node_id": "office"}, async_update_listeners=Mock())
-    await module.async_setup_user_notifications(hass, SimpleNamespace(entry_id="entry", async_on_unload=lambda callback: None), coordinator)
+    hass.data["simson"]["entry"]["coordinator"] = coordinator
+    hass.unload_callbacks = []
+    await module.async_setup_user_notifications(hass, SimpleNamespace(entry_id="entry", async_on_unload=hass.unload_callbacks.append), coordinator)
+    hass.data["simson"]["entry"]["test_store"] = stores[0]
     return hass, listeners, handlers
+
+
+@pytest.mark.asyncio
+async def test_admin_can_map_a_contact_to_a_named_phone_and_restore_automatic_discovery(monkeypatch):
+    hass, listeners, handlers = await notification_fixture(monkeypatch)
+    hass.auth.async_get_user.return_value = SimpleNamespace(id="admin", is_admin=True)
+    hass.states = SimpleNamespace(get=lambda entity_id: SimpleNamespace(attributes={
+        "simson_contact": True, "user_id": "recipient", "entry_id": "entry"}))
+    request = SimpleNamespace(data={"entity_id": "sensor.recipient", "notify_service": "notify.mobile_app_room_phone",
+        "dashboard_path": "/simson-call", "automatic": False}, context=SimpleNamespace(user_id="admin"))
+
+    await handlers["set_user_notification_target"](request)
+
+    expected = {"recipient": {"service": "notify.mobile_app_room_phone", "dashboard_path": "/simson-call"}}
+    assert hass.data["simson"]["entry"]["user_notification_targets"] == expected
+    assert hass.data["simson"]["entry"]["test_store"].saved == expected
+    hass.data["simson"]["entry"]["coordinator"].async_update_listeners.assert_called_once()
+
+    incoming = {"node_id": "office", "call_id": "mapped-call", "target_user_id": "recipient"}
+    await listeners["simson_incoming_call"](SimpleNamespace(event_type="simson_incoming_call", data=incoming))
+    sent = hass.services.async_call.await_args.args
+    assert sent[:2] == ("notify", "mobile_app_room_phone")
+    assert parse_qs(urlsplit(sent[2]["data"]["actions"][0]["uri"]).query) == {
+        "simson_action": ["answer"], "simson_call": ["mapped-call"], "simson_node": ["office"]}
+
+    request.data["automatic"] = True
+    await handlers["set_user_notification_target"](request)
+    assert hass.data["simson"]["entry"]["user_notification_targets"] == {}
+    assert hass.data["simson"]["entry"]["test_store"].saved == {}
 
 
 @pytest.mark.asyncio
@@ -159,7 +203,7 @@ async def test_automatic_notification_is_private_named_and_cleared(monkeypatch):
     assert sent[:2] == ("notify", "mobile_app")
     assert sent[2]["target"] == ["private-webhook"]
     assert sent[2]["message"] == "ds is calling you"
-    assert urlsplit(sent[2]["data"]["actions"][0]["uri"]).path == "/simson-call"
+    assert urlsplit(sent[2]["data"]["actions"][2]["uri"]).path == "/simson-call"
     assert "private-webhook" not in str(hass.bus.async_fire.call_args)
     assert "push_targets" not in hass.data["simson"]["entry"]["user_notification_status"]["nitish"]
     discover.return_value = []
@@ -199,3 +243,70 @@ async def test_notification_test_service_enforces_user_ownership_and_missing_pho
     body = hass.services.async_call.await_args.args[2]
     assert body["target"] == ["private-webhook"]
     assert "actions" not in body["data"]
+
+
+@pytest.mark.asyncio
+async def test_phone_realerts_only_while_live_and_clears_when_status_event_is_missed(monkeypatch):
+    hass, listeners, _ = await notification_fixture(monkeypatch, {"recipient": {"service": "notify.mobile_app_phone"}})
+    monkeypatch.setattr(module, "RING_REMINDER_SECONDS", 0.001)
+    live = {"call_id": "live-call", "state": "incoming"}
+    client = SimpleNamespace(calls=AsyncMock(side_effect=lambda: {"calls": [live]}))
+    hass.data["simson"]["entry"]["client"] = client
+    repeated, cleared = asyncio.Event(), asyncio.Event()
+    async def sent(*args, **kwargs):
+        if args[2]["message"] == "clear_notification":
+            cleared.set()
+        elif hass.services.async_call.await_count == 2:
+            live["state"] = "active"
+            repeated.set()
+    hass.services.async_call.side_effect = sent
+    event = SimpleNamespace(event_type="simson_incoming_call", data={
+        "node_id": "office", "call_id": "live-call", "target_user_id": "recipient"})
+    try:
+        await listeners["simson_incoming_call"](event)
+        await asyncio.wait_for(repeated.wait(), 1)
+        await asyncio.wait_for(cleared.wait(), 1)
+        calls = hass.services.async_call.await_args_list
+        assert len(calls) == 3
+        assert all(call.args[1] == "mobile_app_phone" for call in calls)
+        assert all(call.args[2]["data"]["tag"] == "simson_user_live-call" for call in calls)
+        assert calls[-1].args[2]["message"] == "clear_notification"
+        await listeners["simson_incoming_call"](event)
+        assert hass.services.async_call.await_count == 3
+    finally:
+        for callback in hass.unload_callbacks:
+            if callable(callback): callback()
+
+
+@pytest.mark.asyncio
+async def test_one_slow_phone_does_not_delay_another_users_notification(monkeypatch):
+    hass, listeners, _ = await notification_fixture(monkeypatch, {
+        "first": {"service": "notify.mobile_app_first"}, "second": {"service": "notify.mobile_app_second"}})
+    entered, release = asyncio.Event(), asyncio.Event()
+    async def send(*args, **kwargs):
+        if args[1] == "mobile_app_first":
+            entered.set(); await release.wait()
+    hass.services.async_call.side_effect = send
+    first = asyncio.create_task(listeners["simson_incoming_call"](SimpleNamespace(event_type="simson_incoming_call",
+        data={"node_id": "office", "call_id": "one", "target_user_id": "first"})))
+    try:
+        await asyncio.wait_for(entered.wait(), 1)
+        await asyncio.wait_for(listeners["simson_incoming_call"](SimpleNamespace(event_type="simson_incoming_call",
+            data={"node_id": "office", "call_id": "two", "target_user_id": "second"})), 1)
+        assert hass.services.async_call.await_count == 2
+    finally:
+        release.set(); await first
+
+
+@pytest.mark.asyncio
+async def test_failed_mapping_save_preserves_the_previous_phone(monkeypatch):
+    hass, _, handlers = await notification_fixture(monkeypatch, {"recipient": {"service": "notify.mobile_app_old"}})
+    hass.auth.async_get_user.return_value = SimpleNamespace(id="admin", is_admin=True)
+    hass.states = SimpleNamespace(get=lambda entity_id: SimpleNamespace(attributes={
+        "simson_contact": True, "user_id": "recipient", "entry_id": "entry"}))
+    owner = hass.data["simson"]["entry"]
+    owner["user_notification_store"].async_save = AsyncMock(side_effect=RuntimeError("storage unavailable"))
+    with pytest.raises(RuntimeError, match="storage unavailable"):
+        await handlers["set_user_notification_target"](SimpleNamespace(data={"entity_id": "sensor.recipient",
+            "notify_service": "notify.mobile_app_new"}, context=SimpleNamespace(user_id="admin")))
+    assert owner["user_notification_targets"]["recipient"]["service"] == "notify.mobile_app_old"
