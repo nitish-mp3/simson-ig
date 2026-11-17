@@ -4,15 +4,7 @@ import { authenticatedGet } from '../transport/ha-api.js';
 
 export const withHomeAssistant = Base => class extends Base {
 _autoDetectNodeId() {
-    if (!this._hass?.states) return;
-    for (const entityId of Object.keys(this._hass.states)) {
-      const m = entityId.match(/^sensor\.simson_(.+)_connection$/);
-      if (m) {
-        this._detectedNodeId = m[1];
-        console.info("Simson: auto-detected node_id:", this._detectedNodeId);
-        return;
-      }
-    }
+    this._detectedNodeId = canonicalNodeId(this._hass);
   }
 
 _nodeId() {

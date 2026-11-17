@@ -30,6 +30,24 @@ Read-only VPS checks confirmed 6202 enabled/default-outbound, a registered TCP c
 
 ## User contacts
 
+### Configure phones independently of cards
+
+Open **Settings → Devices & services → Simson → Configure → People and phone mappings**.
+Choose the HA user, choose their Companion phone by name, and save. You can edit
+the mapping later, restore Automatic discovery, disable phone notifications, or
+send a test. This does not require a user card or any dashboard. The mapping is
+stored centrally against the stable HA user ID; scripts and native Call buttons
+only select the user contact entity, never a phone name or device entity.
+The connected phone must use the recipient's HA login to answer private calls.
+Keep the default `/simson-call` screen unless a custom dashboard contains the
+Simson call controls. No phone mapping is assigned automatically to another user.
+
+Integration 3.9.4 / card 5.9.5 also correct automatic node detection when retired
+unavailable sensors exist before the current connection sensor. Explicit node
+selections remain scoped. Stable sensor roles preserve lookup after entity renames.
+Unavailable sensors are shown as unavailable rather than reported as a confirmed
+add-on disconnection.
+
 Every enabled, non-system HA user has a stable Simson contact sensor. Its `contact_id` is derived from the integration entry and HA user ID, so changing a display name does not change the unique ID. The contact remains selectable without dashboard presence; it is not a claim that the browser is online. Renaming contacts uses the normal HA entity UI.
 
 ```yaml

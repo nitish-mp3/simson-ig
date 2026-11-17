@@ -1,17 +1,17 @@
 {
   "simson-card.js": {
     "bytes": 12019,
-    "gzip": 4286
+    "gzip": 4284
   },
-  "chunks/sip-ua-GR4HQOLL.js": {
+  "chunks/sip-ua-TJIYSD2U.js": {
     "bytes": 13651,
-    "gzip": 4525
+    "gzip": 4524
   },
   "chunks/sip-room-media-DNWKOWYB.js": {
     "bytes": 5441,
     "gzip": 1912
   },
-  "chunks/card-QS2JO2VK.js": {
+  "chunks/card-7PMO42DN.js": {
     "bytes": 200,
     "gzip": 129
   },
@@ -19,27 +19,27 @@
     "bytes": 3082,
     "gzip": 1207
   },
-  "chunks/rooms-4NLHL4ZV.js": {
+  "chunks/rooms-LMBJE5HT.js": {
     "bytes": 25448,
-    "gzip": 8197
+    "gzip": 8201
   },
   "chunks/screen-JOK64D3Q.js": {
     "bytes": 127,
     "gzip": 111
   },
-  "chunks/source-J4VDVYPF.js": {
+  "chunks/source-CK4VJRRK.js": {
     "bytes": 238,
     "gzip": 149
   },
-  "chunks/chunk-ER3BSLZT.js": {
+  "chunks/chunk-KIMMMZWB.js": {
     "bytes": 6107,
     "gzip": 2402
   },
-  "chunks/chunk-YLON3KRG.js": {
-    "bytes": 112037,
-    "gzip": 30613
+  "chunks/chunk-TXXIOT3V.js": {
+    "bytes": 112592,
+    "gzip": 30822
   },
-  "chunks/chunk-UO4OHK7T.js": {
+  "chunks/chunk-5WMKI6E3.js": {
     "bytes": 30,
     "gzip": 50
   },

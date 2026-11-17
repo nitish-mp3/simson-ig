@@ -6,13 +6,21 @@ export function connectionEntity(hass, config = {}, detected = '') {
     const exact = states[`sensor.simson_${requested}_connection`];
     if (exact) return exact;
     return Object.entries(states).find(([entityId, entity]) =>
-      /^sensor\.simson_.+_connection$/.test(entityId) && entity.attributes?.node_id === requested)?.[1];
+      (/^sensor\.simson_.+_connection$/.test(entityId) || entity.attributes?.simson_role === 'connection') && entity.attributes?.node_id === requested)?.[1];
   }
-  return Object.entries(states).find(([entityId]) => /^sensor\.simson_.+_connection$/.test(entityId))?.[1];
+  return Object.entries(states)
+    .filter(([entityId, entity]) => /^sensor\.simson_.+_connection$/.test(entityId) || entity.attributes?.simson_role === 'connection')
+    .sort(([,a],[,b]) => connectionRank(a) - connectionRank(b))[0]?.[1];
+}
+
+function connectionRank(entity) {
+  return entity.state === 'connected' ? 0 : entity.state === 'disconnected' ? 1 : 2;
 }
 
 export function canonicalNodeId(hass, config = {}, detected = '') {
-  return connectionEntity(hass, config, detected)?.attributes?.node_id || config.node_id || detected || '';
+  const connection = connectionEntity(hass, config, detected);
+  const entityId = Object.keys(hass?.states || {}).find(key => hass.states[key] === connection);
+  return connection?.attributes?.node_id || config.node_id || detected || entityId?.match(/^sensor\.simson_(.+)_connection$/)?.[1] || '';
 }
 
 export function nodeEntity(hass, config, detected, suffix) {
@@ -22,12 +30,12 @@ export function nodeEntity(hass, config, detected, suffix) {
   if (suffix === 'connection') return connectionEntity(hass, config, detected);
   const connection = connectionEntity(hass, config, detected);
   const connectionId = Object.keys(states).find(entityId => states[entityId] === connection);
-  const siblingId = connectionId?.replace(/_connection$/, `_${suffix}`);
+  const siblingId = connectionId?.endsWith('_connection') ? connectionId.replace(/_connection$/, `_${suffix}`) : null;
   if (siblingId && states[siblingId]) return states[siblingId];
   const nodeId = canonicalNodeId(hass, config, detected);
   const exact = states[`sensor.simson_${nodeId}_${suffix}`];
   if (exact) return exact;
   return Object.entries(states).find(([entityId, entity]) =>
-    entityId.startsWith('sensor.simson_') && entityId.endsWith(`_${suffix}`) &&
+    ((entityId.startsWith('sensor.simson_') && entityId.endsWith(`_${suffix}`)) || entity.attributes?.simson_role === suffix) &&
     entity.attributes?.node_id === nodeId)?.[1];
 }

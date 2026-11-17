@@ -12,6 +12,26 @@ const hass = {states:{
   'sensor.simson_site_two_connection':{state:'connected',attributes:{node_id:'site-two'}},
 }};
 
+test('automatic cards ignore an old unavailable sensor before the live node',()=>{
+  const live={states:{
+    'sensor.simson_cd998bdb_simson_connection':{state:'unavailable',attributes:{}},
+    'sensor.simson_pncl30_connection':{state:'connected',attributes:{node_id:'pncl30'}},
+  }};
+  assert.equal(canonicalNodeId(live,{}),'pncl30');
+  const host=new (withHomeAssistant(class {}))();host._hass=live;
+  host._autoDetectNodeId();assert.equal(host._detectedNodeId,'pncl30');
+  assert.equal(canonicalNodeId(live,{node_id:'cd998bdb_simson'}),'cd998bdb_simson');
+});
+
+test('renamed connection sensors use their stable Simson role and node',()=>{
+  const renamed={state:'connected',attributes:{simson_role:'connection',node_id:'site-one'}};
+  const status={state:'idle',attributes:{simson_role:'call_state',node_id:'site-one'}};
+  const states={'sensor.office_phone_link':renamed,'sensor.office_phone_status':status};
+  assert.equal(canonicalNodeId({states},{}),'site-one');
+  assert.equal(nodeEntity({states},{node_id:'site-one'},'','connection'),renamed);
+  assert.equal(nodeEntity({states},{node_id:'site-one'},'','call_state'),status);
+});
+
 test('sensor aliases map to canonical node identity without losing their sibling call sensor',()=>{
   assert.equal(canonicalNodeId(hass,{node_id:'install_slug'}),'site-one');
   assert.equal(nodeEntity(hass,{node_id:'install_slug'},'', 'call_state'),call);

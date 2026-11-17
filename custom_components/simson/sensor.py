@@ -199,6 +199,7 @@ class SimsonConnectionSensor(SimsonBaseSensor):
             return {
                 "node_id": self.coordinator.data.get("node_id", ""),
                 "account_id": self.coordinator.data.get("account_id", ""),
+                "simson_role": "connection",
                 "uptime": self.coordinator.data.get("uptime", 0),
                 "routing": self.coordinator.data.get("routing", {}),
             }
@@ -229,14 +230,16 @@ class SimsonCallStateSensor(SimsonBaseSensor):
 
     @property
     def extra_state_attributes(self):
+        identity = {"simson_role": "call_state", "node_id": (self.coordinator.data or {}).get("node_id", "")}
         if not self.coordinator.data:
-            return {}
+            return identity
         calls_data = self.coordinator.data.get("calls_data", {})
         active = calls_data.get("active_call")
         if active:
             if _is_stale_ringing_call(active):
-                return {}
+                return identity
             return {
+                **identity,
                 "call_id": active.get("call_id", ""),
                 "direction": active.get("direction", ""),
                 "remote_node_id": active.get("remote_node_id", ""),
@@ -278,7 +281,7 @@ class SimsonCallStateSensor(SimsonBaseSensor):
                 "routing": active.get("routing", {}),
                 "raw": active,
             }
-        return {}
+        return identity
 
 
 class SimsonActiveCallsSensor(SimsonBaseSensor):
@@ -317,6 +320,8 @@ class SimsonActiveCallsSensor(SimsonBaseSensor):
             if c.get("state") in ("requesting", "ringing", "incoming", "active")
         ]
         return {
+            "simson_role": "calls_count",
+            "node_id": self.coordinator.data.get("node_id", ""),
             "active_calls": active_calls,
             "active_call": calls_data.get("active_call"),
             "total": calls_data.get("total", 0),

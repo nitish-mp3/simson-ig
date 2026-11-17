@@ -381,6 +381,26 @@ test('renamed sensor prefixes share a canonical-node session and request media f
   await page.close();
 });
 
+test('default cards select the connected node when a retired unavailable sensor comes first',async()=>{
+  const page=await browser.newPage();await load(page);
+  await page.evaluate(()=>{
+    const states={
+      'sensor.simson_retired_connection':{state:'unavailable',attributes:{}},
+      ...window.mockHass.states,
+    };
+    const hass={...window.mockHass,states};
+    const cards=['simson-relay-card','simson-live-call-card','simson-history-card'].map(tag=>{
+      const card=document.createElement(tag);card.setConfig({});card.hass=hass;return card;
+    });
+    document.querySelector('#mount').replaceChildren(...cards);
+  });
+  for (const tag of ['simson-relay-card','simson-live-call-card','simson-history-card']) {
+    await page.locator(tag).getByText('Connected',{exact:true}).waitFor();
+    assert.equal(await page.locator(tag).getByText('Node is offline',{exact:true}).count(),0);
+  }
+  await page.close();
+});
+
 test('Mauritius card dialing preserves +230 and the explicitly selected 6202 trunk',async()=>{
   const page=await browser.newPage();await load(page);
   await page.locator('#node-input').fill('+23059330025');

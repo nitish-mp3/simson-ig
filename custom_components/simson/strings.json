@@ -35,5 +35,47 @@
         "name": "Last Automation Event"
       }
     }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Simson settings",
+        "menu_options": {
+          "user_notifications": "People and phone mappings",
+          "connection": "Add-on connection"
+        }
+      },
+      "user_notifications": {
+        "title": "People and phone mappings",
+        "description": "Choose a user. The saved phone mapping belongs to their Simson contact and works with cards, buttons and scripts.",
+        "data": {
+          "user_id": "Home Assistant user"
+        }
+      },
+      "notification_phone": {
+        "title": "Call notification phone",
+        "description": "Choose the Companion device for this user. This is stored centrally, independently of dashboards. The phone must be signed in as the recipient to answer. Save before testing; if the test fails, the mapping is still saved.",
+        "data": {
+          "phone": "Companion phone",
+          "dashboard_path": "Call screen path",
+          "send_test": "Save and send a test notification"
+        }
+      },
+      "connection": {
+        "title": "Add-on connection",
+        "description": "Change only when the add-on API address changes.",
+        "data": {
+          "addon_url": "Simson add-on API URL"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Cannot reach the Simson add-on.",
+      "phone_unavailable": "This phone notify service is unavailable. Choose a registered Companion phone.",
+      "notification_failed": "Could not finish saving or testing. Check the phone mapping and notification permissions, then retry."
+    },
+    "abort": {
+      "contacts_unavailable": "No Simson user contacts are loaded for this entry. Check the integration connection and enabled Home Assistant users."
+    }
   }
 }

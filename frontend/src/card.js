@@ -55,6 +55,8 @@ export class SimsonCard extends LitElement {
   render() {
     const host = this.session;
     const view = host?._view;
+    const connectionState = host?._val('connection');
+    const connectionLabel = view?.connected ? 'Connected' : connectionState === 'disconnected' ? 'Offline' : 'Unavailable';
     const mode = this._config.view || 'combined';
     const title = this._config.title || ({dial:'Dial a call',live:'Live call',history:'Recent calls',devices:'Call devices',user:'Call a user'}[mode] || 'Simson');
     const panel = host?._activeTab || 'dial';
@@ -64,9 +66,10 @@ export class SimsonCard extends LitElement {
     const showDialog = host && (host._pickerOpen ? pickerOwner === this : liveOwner === this);
     const callPanel = (session, state) => host._showCallDialog && showDialog ? nothing : callView(session, state);
     return html`<article class="surface mode-${mode}">
-      <header class="header"><span class="brand-mark" aria-hidden="true">S</span><div class="heading"><span class="eyebrow">SIMSON · ${mode === 'combined' ? 'CALL WORKSPACE' : mode.toUpperCase()}</span><h1>${title}</h1></div><span class="status ${view?.connected ? 'online' : ''}"><i></i>${view?.connected ? 'Connected' : 'Offline'}</span></header>
+      <header class="header"><span class="brand-mark" aria-hidden="true">S</span><div class="heading"><span class="eyebrow">SIMSON · ${mode === 'combined' ? 'CALL WORKSPACE' : mode.toUpperCase()}</span><h1>${title}</h1></div><span class="status ${view?.connected ? 'online' : ''}"><i></i>${connectionLabel}</span></header>
+      ${host?._hass?.user?.is_admin ? html`<p class="fine-print"><a href="/config/integrations/integration/simson">Simson settings · People and phone mappings</a></p>` : nothing}
       ${!view ? html`<div class="empty"><h2>Waiting for your node</h2><p>Select a Simson node in the card editor, or wait for the integration to connect.</p></div>` : html`
-        ${!view.connected ? html`<div class="notice" role="status"><b>Node is offline</b><br>Calling resumes when the addon reconnects. Your saved contacts remain available.</div>` : nothing}
+        ${!view.connected ? html`<div class="notice" role="status"><b>${connectionState === 'disconnected' ? 'Node is offline' : 'Connection sensor unavailable'}</b><br>${connectionState === 'disconnected' ? 'Calling resumes when the addon reconnects. Your saved contacts remain available.' : 'Check the Simson integration and the selected node. An unavailable sensor does not establish that the add-on is offline.'}</div>` : nothing}
         ${host._actionError ? html`<div class="notice error" role="alert">${host._actionError}</div>` : nothing}
         ${host._actionPending ? html`<div class="action-progress" role="status">${host._actionPending}</div>` : nothing}
         ${mode === 'dial' && view.hasCall ? html`<div class="current-call-banner" role="status"><span><b>${view.remoteLabel}</b><small>${view.isActive ? 'Call in progress' : view.isIncoming ? 'Incoming call' : 'Calling…'}</small></span><button @click=${()=>{host._showCallDialog=true;host._render();}}>Call controls</button></div>` : nothing}

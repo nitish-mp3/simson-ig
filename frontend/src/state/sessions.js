@@ -8,9 +8,8 @@ export function acquireSession(view, hass, config) {
   let sessions = connections.get(connection);
   if (!sessions) connections.set(connection, sessions = new Map());
   const configuredNode = config.node_id || hass.states?.[config.entity]?.attributes?.node_id || [config.connection_entity, config.call_state_entity, config.calls_count_entity]
-    .map(value => value?.match(/^sensor\.simson_(.+)_(?:connection|call_state|calls_count)$/)?.[1]).find(Boolean);
-  const prefix = configuredNode || Object.keys(hass.states || {}).map(value => value.match(/^sensor\.simson_(.+)_connection$/)?.[1]).find(Boolean) || '';
-  const node = canonicalNodeId(hass, {...config, node_id:prefix});
+    .map(value => hass.states?.[value]?.attributes?.node_id || value?.match(/^sensor\.simson_(.+)_(?:connection|call_state|calls_count)$/)?.[1]).find(Boolean);
+  const node = canonicalNodeId(hass, {...config, node_id:configuredNode || ''});
   const key = `${hass.user?.id || ''}:${node}`;
   let session = sessions.get(key);
   if (!session) {
